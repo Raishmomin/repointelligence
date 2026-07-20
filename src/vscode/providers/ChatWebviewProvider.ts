@@ -8,6 +8,9 @@ import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
 import { ProposalContentProvider } from './ProposalContentProvider';
 import { AgentStreamBridge } from './AgentStreamBridge';
+import { buildReactHtml, isReactUiEnabled } from './ReactWebviewHost';
+import { ProviderRpcHandler } from './ProviderRpcHandler';
+import type { RpcMethod, TaskModeDto } from '../../shared/types/webview.types';
 import { EventBus } from '../../shared/EventBus';
 import { ChatMessage } from '../../shared/types/context.types';
 import { AgentRun, ChangeSet, CommandRequest } from '../../shared/types/agent.types';
@@ -20,16 +23,106 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private activeProjectId: string | null = null;
 
   private readonly agentStream = new AgentStreamBridge(message => this.postToWebview(message));
+  private readonly rpcHandler = new ProviderRpcHandler(this.container.providerFactory);
+  private activeMode: TaskModeDto = 'implement';
+  /** Set when a run was served by a fallback, so the composer bar can flag it. */
+  private lastFallbackFrom: string | undefined;
 
   constructor() {
-    EventBus.getInstance().on('scan:completed', async (result) => {
+    const events = EventBus.getInstance();
+
+    events.on('scan:completed', async (result) => {
       this.activeProjectId = result.projectId;
       await this.handleReady();
     });
+
+    // Which backend actually served the last run. A fallback changes it silently, so the
+    // composer bar has to be told rather than inferring it from configuration.
+    events.on('provider:resolved', payload => {
+      this.lastFallbackFrom = payload.reason === 'fallback' ? payload.fallbackFrom : undefined;
+      void this.pushModelState();
+    });
+
+    events.on('provider:changed', () => {
+      this.rpcHandler.getCatalog().invalidate();
+      void this.pushModelState(true);
+    });
+
+    // Approvals appear mid-run, not in response to anything the panel asked for.
+    events.on('agent:approvalRequired', () => this.pushApprovals());
+    events.on('agent:runFinished', () => this.pushApprovals());
   }
 
   public dispose(): void {
     this.agentStream.dispose();
+  }
+
+  // ── Model and provider surface ─────────────────────────────
+
+  /** Pushes the composer bar's state and the full model catalogue. */
+  private async pushModelState(force = false): Promise<void> {
+    try {
+      const catalog = this.rpcHandler.getCatalog();
+      const state = catalog.state(this.activeMode);
+      const models = await catalog.list(force);
+      this.postToWebview({ type: 'modelState', state: { ...state, fallbackFrom: this.lastFallbackFrom }, models });
+    } catch (error) {
+      this.logger.warn('Could not build the model catalogue', { error: String(error) });
+    }
+  }
+
+  /**
+   * Switches model, and provider with it when the chosen model belongs to another one.
+   *
+   * Routed through setChatModel rather than save() so the provider's other settings —
+   * base URL, context window — survive the switch.
+   */
+  private async handleSelectModel(providerId: string, modelId: string): Promise<void> {
+    await this.rpcHandler.getSetup().setChatModel(providerId, modelId);
+    this.rpcHandler.getCatalog().invalidate();
+    // A deliberate switch clears any stale fallback badge.
+    this.lastFallbackFrom = undefined;
+    await this.pushModelState(true);
+  }
+
+  /** Change sets and commands waiting on the user, for the approval cards. */
+  private pushApprovals(): void {
+    const changes = this.container.agentService.getPendingChangeSets().map(change => ({
+      changeSetId: change.id,
+      summary: change.summary,
+      paths: change.operations.map(op => op.path),
+      risk: change.operations[0]?.risk ?? 'low',
+    }));
+
+    const commands = this.container.agentService.getPendingCommands().map(command => ({
+      commandId: command.id,
+      summary: `${command.command} ${command.args.join(' ')} — ${command.reason}`,
+      paths: [],
+      risk: command.risk,
+    }));
+
+    this.postToWebview({ type: 'approvals', approvals: [...changes, ...commands] });
+  }
+
+  /**
+   * Answers a correlated request.
+   *
+   * Replies on every path including a throw — postMessage is fire-and-forget, so a handler
+   * that returns without replying leaves a pending entry and its timer alive in the webview
+   * for the rest of the session.
+   */
+  private async handleRpc(requestId: string, method: RpcMethod, params: unknown): Promise<void> {
+    try {
+      const payload = await this.rpcHandler.handle(method, params);
+      this.postToWebview({ type: 'rpcResponse', requestId, ok: true, payload });
+    } catch (error) {
+      this.postToWebview({
+        type: 'rpcResponse',
+        requestId,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Trigger a programmatic prompt from editor context commands */
@@ -79,13 +172,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this._view = webviewView;
     this.logger.info('resolveWebviewView called — setting up webview');
 
+    const useReact = isReactUiEnabled();
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this.container.extensionContext.extensionUri],
+      // Narrowed to the built UI only when React is serving it. The legacy inline HTML
+      // loads no local resources at all, but keeping the broad root would leave the whole
+      // extension directory readable from the webview for no reason.
+      localResourceRoots: useReact
+        ? [vscode.Uri.joinPath(this.container.extensionContext.extensionUri, 'out', 'webview')]
+        : [this.container.extensionContext.extensionUri],
     };
 
-    webviewView.webview.html = this.getHtmlContent(webviewView.webview);
-    this.logger.info('Webview HTML set successfully');
+    // Without this, collapsing the sidebar mid-run destroys every step already delivered
+    // and the timeline comes back empty.
+    webviewView.webview.options = { ...webviewView.webview.options };
+    if ('retainContextWhenHidden' in webviewView) {
+      (webviewView as { retainContextWhenHidden?: boolean }).retainContextWhenHidden = true;
+    }
+
+    webviewView.webview.html = useReact
+      ? buildReactHtml(webviewView.webview, this.container.extensionContext.extensionUri)
+      : this.getHtmlContent(webviewView.webview);
+    this.logger.info(`Webview HTML set (${useReact ? 'react' : 'legacy'})`);
 
     // Register messages listener
     webviewView.webview.onDidReceiveMessage(async (message) => {
@@ -110,6 +218,41 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           case 'deleteSession':
             await this.handleDeleteSession(message.sessionId);
             break;
+          case 'setMode':
+            this.activeMode = message.mode;
+            await this.pushModelState();
+            break;
+          case 'selectModel':
+            await this.handleSelectModel(message.providerId, message.modelId);
+            break;
+          case 'refreshModels':
+            await this.pushModelState(true);
+            break;
+          case 'cancelRun':
+            this.container.agentService.getRunningRunIds().forEach(id => this.container.agentService.cancel(id));
+            break;
+          case 'approveChangeSet':
+            await this.container.agentService.approveChangeSet(message.changeSetId);
+            this.pushApprovals();
+            break;
+          case 'rejectChangeSet':
+            await this.container.agentService.rejectChangeSet(message.changeSetId);
+            this.pushApprovals();
+            break;
+          case 'approveCommand':
+            this.showAgentLog(await this.container.agentService.approveCommand(message.commandId));
+            this.pushApprovals();
+            break;
+          case 'rejectCommand':
+            await this.container.agentService.rejectCommand(message.commandId);
+            this.pushApprovals();
+            break;
+          case 'openDiff':
+            await this.showAgentDiff(message.changeSetId, message.path);
+            break;
+          case 'rpcRequest':
+            await this.handleRpc(message.requestId, message.method, message.params);
+            break;
         }
       } catch (error) {
         this.logger.error('Error handling webview message', error);
@@ -123,6 +266,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleReady(): Promise<void> {
+    // The composer bar needs these before anything else renders, and they do not depend on
+    // a scanned project.
+    void this.pushModelState();
+    this.pushApprovals();
+
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const currentWorkspacePath = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : null;
 

@@ -320,6 +320,11 @@
           },
           "default": [],
           "description": "Provider ids to try, in order, when the selected one is unavailable. Empty means use each provider's own rank."
+        },
+        "repo-intelligence.ui.reactPanel": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Use the rebuilt sidebar with an inline model picker, mode toggle and approval cards. Turn off to fall back to the previous UI if something goes wrong."
         }
       }
     },

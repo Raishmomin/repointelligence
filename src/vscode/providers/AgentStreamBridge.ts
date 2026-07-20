@@ -1,19 +1,9 @@
 import { EventBus } from '../../shared/EventBus';
+import type { AgentStreamStep } from '../../shared/types/webview.types';
 
-/**
- * One agent-loop step as the UI needs to render it.
- *
- * Deliberately flat and serialisable: this crosses the extension-host/webview boundary via
- * postMessage, and is the same shape the React rebuild will consume.
- */
-export type AgentStreamStep =
-  | { kind: 'turn'; turn: number; maxTurns: number }
-  | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool'; toolCallId: string; name: string; status: 'running' | 'ok' | 'error'; preview?: string }
-  | { kind: 'approval'; changeSetIds: string[]; commandIds: string[] }
-  | { kind: 'finished'; status: string; turns: number; usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number } }
-  | { kind: 'error'; message: string };
+// Re-exported for existing importers; the type itself now lives in the shared protocol so
+// the webview can consume it without reaching into the extension host's module graph.
+export type { AgentStreamStep };
 
 export interface AgentStreamMessage {
   type: 'agentStream';
