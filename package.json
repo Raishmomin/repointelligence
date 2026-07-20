@@ -1,0 +1,280 @@
+{
+  "name": "repo-intelligence",
+  "displayName": "Repository Intelligence Engine",
+  "description": "AI-powered repository analysis engine that deeply understands your codebase before generating context-aware code using local Ollama models.",
+  "version": "0.1.0",
+  "publisher": "repo-intelligence",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "ollama",
+    "code-analysis",
+    "repository",
+    "intelligence",
+    "ast",
+    "typescript",
+    "react",
+    "nextjs",
+    "nestjs"
+  ],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "repo-intelligence.scanRepository",
+        "title": "Scan Repository",
+        "category": "Repo Intelligence",
+        "icon": "$(search)"
+      },
+      {
+        "command": "repo-intelligence.openChat",
+        "title": "Open Chat",
+        "category": "Repo Intelligence",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "repo-intelligence.generateCode",
+        "title": "Generate Code",
+        "category": "Repo Intelligence",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "repo-intelligence.reviewCode",
+        "title": "Review Code",
+        "category": "Repo Intelligence",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "repo-intelligence.showKnowledge",
+        "title": "Show Knowledge Base",
+        "category": "Repo Intelligence",
+        "icon": "$(database)"
+      },
+      {
+        "command": "repo-intelligence.startAgent",
+        "title": "Start Coding Agent",
+        "category": "Repo Intelligence",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "repo-intelligence.reviewChangeSet",
+        "title": "Review Pending Change Set",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.approveChangeSet",
+        "title": "Approve Pending Change Set",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.rejectChangeSet",
+        "title": "Reject Pending Change Set",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.approveCommand",
+        "title": "Approve Pending Agent Command",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.rejectCommand",
+        "title": "Reject Pending Agent Command",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.revertChangeSet",
+        "title": "Revert Applied Change Set",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.showAgentHistory",
+        "title": "Show Agent History",
+        "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.revokeSessionTrust",
+        "title": "Revoke Agent Session Trust",
+        "category": "Repo Intelligence"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "repo-intelligence",
+          "title": "Repo Intelligence",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "repo-intelligence": [
+        {
+          "type": "webview",
+          "id": "repo-intelligence.chatView",
+          "name": "Chat"
+        },
+        {
+          "id": "repo-intelligence.knowledgeView",
+          "name": "Knowledge Base"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Repo Intelligence",
+      "properties": {
+        "repo-intelligence.ollama.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Ollama server URL"
+        },
+        "repo-intelligence.ollama.chatModel": {
+          "type": "string",
+          "default": "gemma2:2b",
+          "description": "Default model for chat and code generation"
+        },
+        "repo-intelligence.ollama.embeddingModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Model for generating embeddings"
+        },
+        "repo-intelligence.scan.excludePatterns": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            "out",
+            ".next",
+            "coverage",
+            ".turbo",
+            ".cache"
+          ],
+          "description": "Glob patterns to exclude from scanning"
+        },
+        "repo-intelligence.scan.maxFileSize": {
+          "type": "number",
+          "default": 524288,
+          "description": "Maximum file size in bytes to scan (default 512KB)"
+        },
+        "repo-intelligence.context.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens to include in context for AI prompts"
+        },
+        "repo-intelligence.scan.autoScanOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan the repository when the workspace opens"
+        },
+        "repo-intelligence.agent.maxIterations": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum model/tool turns per agent request"
+        },
+        "repo-intelligence.agent.commandTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "Maximum execution time for an approved agent command"
+        },
+        "repo-intelligence.agent.maxChangeSetSize": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "description": "Maximum file operations in one agent change set"
+        },
+        "repo-intelligence.agent.initialContextMaxChars": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1000,
+          "description": "Maximum indexed code sent before the agent uses follow-up tools"
+        },
+        "repo-intelligence.agent.ignorePatterns": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            ".git",
+            ".env"
+          ],
+          "description": "Path segments that the coding agent must not access"
+        },
+        "repo-intelligence.agent.allowSessionTrust": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the UI may offer in-memory session trust; commands always require approval"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "repo-intelligence.reviewCode",
+          "group": "repo-intelligence@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "repo-intelligence.generateCode",
+          "group": "repo-intelligence@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "repo-intelligence.scanRepository"
+        },
+        {
+          "command": "repo-intelligence.openChat"
+        },
+        {
+          "command": "repo-intelligence.generateCode"
+        },
+        {
+          "command": "repo-intelligence.reviewCode"
+        },
+        {
+          "command": "repo-intelligence.showKnowledge"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/uuid": "^10.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "ollama": "^0.5.0",
+    "sql.js": "^1.11.0",
+    "ts-morph": "^28.0.0",
+    "uuid": "^11.0.0"
+  }
+}

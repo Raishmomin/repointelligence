@@ -1,0 +1,10 @@
+node_modules/
+out/
+webview-ui/dist/
+webview-ui/node_modules/
+*.vsix
+.vscode-test/
+scratch/
+coverage/
+*.log
+.DS_Store
