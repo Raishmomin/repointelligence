@@ -6,8 +6,11 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { OllamaClient } from '../../layer3-reasoning/ollama/OllamaClient';
 import { SearchResult } from '../../shared/types/context.types';
 import { Logger } from '../../shared/Logger';
+import { cosineSimilarity, decodeVector } from '../database/vectorCodec';
 
 export class HybridSearchEngine {
+  private readonly embeddingsPresent = new Map<string, boolean>();
+
   private logger = Logger.getInstance();
 
   constructor(
@@ -27,8 +30,11 @@ export class HybridSearchEngine {
     const results: SearchResult[] = [];
     const keywordResults = this.keywordSearch(projectId, query, limit * 2);
 
+    // Semantic search costs an embedding round trip per query, so it is skipped entirely
+    // when nothing has been embedded — which is the default, since embedding generation is
+    // opt-in. Callers no longer have to pass enableSemantic:false to avoid the cost.
     let semanticResults: SearchResult[] = [];
-    if (options.enableSemantic !== false) {
+    if (options.enableSemantic !== false && this.hasEmbeddings(projectId)) {
       semanticResults = await this.semanticSearch(projectId, query, limit * 2);
     }
 
@@ -127,15 +133,38 @@ export class HybridSearchEngine {
   }
 
   /**
+   * Cached per project: this is checked on every search, and the answer only changes on a
+   * rescan. A count query per keystroke-driven search would be wasteful.
+   */
+  private hasEmbeddings(projectId: string): boolean {
+    const cached = this.embeddingsPresent.get(projectId);
+    if (cached !== undefined) return cached;
+
+    const row = this.database.queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM embeddings e JOIN files f ON e.file_id = f.id WHERE f.project_id = ?',
+      [projectId],
+    );
+    const present = (row?.count ?? 0) > 0;
+    this.embeddingsPresent.set(projectId, present);
+    return present;
+  }
+
+  /** Called after a scan, when embeddings may have appeared or been cleared. */
+  invalidateEmbeddingCache(): void {
+    this.embeddingsPresent.clear();
+  }
+
+  /**
    * Semantic vector similarity search.
    */
   private async semanticSearch(projectId: string, query: string, limit: number): Promise<SearchResult[]> {
     const queryVector = await this.ollamaClient.getEmbedding(query);
     if (queryVector.length === 0) return [];
 
-    // Fetch all vectors in database
-    const dbEmbeddings = this.database.query<{ file_id: string; embedding: any }>(
-      `SELECT file_id, embedding FROM embeddings 
+    // The column is `vector`, not `embedding` — selecting the wrong name made sql.js throw
+    // at prepare time, so this whole path failed rather than degrading.
+    const dbEmbeddings = this.database.query<{ file_id: string; vector: Uint8Array }>(
+      `SELECT file_id, vector FROM embeddings
        WHERE file_id IN (SELECT id FROM files WHERE project_id = ?)`,
       [projectId]
     );
@@ -144,14 +173,12 @@ export class HybridSearchEngine {
 
     for (const emb of dbEmbeddings) {
       try {
-        const vector: number[] = Array.isArray(emb.embedding) 
-          ? emb.embedding 
-          : JSON.parse(emb.embedding);
-
-        const score = this.cosineSimilarity(queryVector, vector);
-        scores.push({ fileId: emb.file_id, score });
+        // Decoded with the same codec used to write it. This previously called
+        // JSON.parse on raw Float32 bytes and could never have succeeded.
+        const vector = decodeVector(emb.vector);
+        scores.push({ fileId: emb.file_id, score: cosineSimilarity(queryVector, vector) });
       } catch {
-        // Skip malformed vectors
+        // One corrupt row should not sink the whole query.
       }
     }
 
@@ -179,19 +206,4 @@ export class HybridSearchEngine {
     return results;
   }
 
-  private cosineSimilarity(vecA: number[], vecB: number[]): number {
-    let dotProduct = 0.0;
-    let normA = 0.0;
-    let normB = 0.0;
-    
-    const len = Math.min(vecA.length, vecB.length);
-    for (let i = 0; i < len; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
 }

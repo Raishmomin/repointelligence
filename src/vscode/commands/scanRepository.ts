@@ -8,6 +8,7 @@ import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
 import { EventBus } from '../../shared/EventBus';
 import { ConventionDetector } from '../../layer2-context/validation/ConventionDetector';
+import { EmbeddingIndexer } from '../../layer2-context/search/EmbeddingIndexer';
 
 /**
  * Execute a full repository scan with progress reporting.
@@ -156,6 +157,35 @@ export async function scanRepository(): Promise<void> {
               );
             }
           });
+
+          // 9.5 Generate embeddings for semantic search.
+          //     Off by default: embedding a large repository is thousands of local model
+          //     calls, so it is opt-in, cancellable, and degrades to keyword-only search
+          //     rather than blocking the scan.
+          if (EmbeddingIndexer.isEnabled() && !token.isCancellationRequested) {
+            progress.report({ message: 'Generating embeddings...' });
+            const indexer = new EmbeddingIndexer(container.embeddingRepository, container.ollamaClient);
+            const indexable = parsedFiles.flatMap(parsed => {
+              const fileId = filePathToId.get(parsed.path);
+              if (!fileId) return [];
+              const content = scanResult.files.find(file => file.path === parsed.path)?.content;
+              if (!content) return [];
+              // SymbolInfo keeps line numbers under `location`; Chunker wants them flat.
+              const symbols = parsed.symbols.map(symbol => ({
+                name: symbol.name,
+                kind: symbol.kind,
+                startLine: symbol.location.startLine,
+                endLine: symbol.location.endLine,
+              }));
+              return [{ fileId, path: parsed.path, content, symbols }];
+            });
+            const embedded = await indexer.indexFiles(indexable, token, {
+              report: message => progress.report({ message }),
+            });
+            if (embedded) logger.info(`Generated embeddings for ${embedded} files.`);
+          }
+          // Whether embeddings exist is cached per project; a scan is when that changes.
+          container.hybridSearchEngine.invalidateEmbeddingCache();
 
           // 10. Save database
           container.database.save();

@@ -214,6 +214,11 @@
           "default": "nomic-embed-text",
           "description": "Model for generating embeddings"
         },
+        "repo-intelligence.search.enableEmbeddings": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Generate embeddings during a scan to enable semantic search. Requires Ollama (the Anthropic API has no embeddings endpoint) and can take several minutes on a large repository. When off, retrieval uses keyword search only."
+        },
         "repo-intelligence.scan.excludePatterns": {
           "type": "array",
           "default": [
