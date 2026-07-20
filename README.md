@@ -60,13 +60,14 @@ This is the part worth understanding before you trust the agent with a repositor
 
 | Guarantee | Mechanism |
 |---|---|
-| The agent cannot touch files outside the workspace | Path resolution rejects absolute paths and anything escaping the root (`pathGuard`) |
-| The agent cannot read secrets | `agent.ignorePatterns` blocks path segments such as `.env`, `node_modules`, `.git` |
-| The agent cannot edit a file it hasn't read | Read-before-Edit invariant, enforced per tool call |
-| The agent cannot clobber a file that changed underneath it | SHA-256 `baseHash` recorded at read time, re-verified at apply time |
-| Commands cannot become shell injection | `spawn` with `shell: false`; the executable must be a single literal token and arguments are passed separately |
-| Every applied change can be undone | Pre-change content is snapshotted and stored with the change set |
-| Nothing happens without a record | Runs, change sets, command requests, and approvals are all persisted |
+| The agent cannot touch files outside the workspace | `pathGuard` rejects absolute paths and anything escaping the root, including via `..` |
+| The agent cannot read secrets | `agent.ignorePatterns` blocks path segments such as `.env`, `node_modules`, `.git`, checked on the *resolved* path so `a/../.env` is caught too |
+| The agent cannot edit a file it hasn't read | Read-before-Edit, enforced inside every edit tool before any I/O |
+| The agent cannot clobber a file that changed underneath it | The file is re-read from disk and hashed against what the agent saw; re-verified again at apply time, since approval can sit pending for minutes |
+| An ambiguous edit is refused, not guessed | `str_replace` requires a unique match and reports the occurrence count instead of editing the first one |
+| Commands cannot become shell injection | `spawn` with `shell: false`; the executable must be a single literal token, arguments passed separately |
+| Every applied change can be undone | A `git stash create` checkpoint is taken before applying — a dangling commit that changes no other git state — with per-operation content snapshots as the fallback |
+| Nothing happens without a record | Runs, transcripts, change sets, command requests, and approvals are all persisted |
 
 **One write path.** `ChangeSetService` is the only module permitted to mutate workspace files. An ESLint rule (`no-restricted-syntax` in `eslint.config.mjs`) fails the build if any other module calls `writeFileSync` and friends — so the guarantees above cannot be bypassed by accident.
 
@@ -123,10 +124,13 @@ Not automated; run before releasing.
 
 ## Known limitations
 
-- AST-level understanding is TypeScript/JavaScript only; other languages fall back to text indexing.
+- AST-level understanding is TypeScript/JavaScript only; other languages fall back to text indexing, and their embeddings use fixed-size windows rather than per-symbol chunks.
 - Semantic search requires Ollama for embeddings even when Claude is the chat provider — the Anthropic API has no embeddings endpoint. Without Ollama, retrieval degrades to keyword-only.
-- Brute-force cosine similarity is fine to roughly 50k vectors; beyond that, retrieval will visibly stall.
 - Embedding a large repository is expensive and is therefore off by default (`search.enableEmbeddings`).
+- Brute-force cosine similarity is fine to roughly 50k vectors; beyond that, retrieval will visibly stall.
+- Approving a change re-indexes the whole repository (debounced to once per burst). A genuinely incremental re-index is not implemented.
+- A run parked awaiting approval lives in memory. Its transcript is persisted, but reloading the window before deciding abandons the run rather than resuming it.
+- The chat panel renders the agent timeline read-only; approving still goes through the command palette.
 
 ## License
 

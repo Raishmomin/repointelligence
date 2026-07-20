@@ -56,6 +56,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // 6. Initialize chat webview panel
   chatWebviewProvider = container.chatWebviewProvider;
   vscode.window.registerWebviewViewProvider('repo-intelligence.chatView', chatWebviewProvider);
+  // Unsubscribes the agent stream bridge from the EventBus on shutdown.
+  context.subscriptions.push({ dispose: () => chatWebviewProvider.dispose() });
 
   // 7. Serve proposed file contents to the diff viewer from memory, so reviewing an
   //    agent change never writes a temp file to disk.
