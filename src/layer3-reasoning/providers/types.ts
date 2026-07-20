@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { ProviderId } from './descriptor.types';
 
 /**
  * Provider-agnostic LLM surface for the agent loop.
@@ -10,12 +11,15 @@ import * as vscode from 'vscode';
  */
 
 /**
+ * Declared in `descriptor.types.ts` (which has no `vscode` dependency, so the webview can
+ * import it) and re-exported here for convenience.
+ *
  * Open by design: providers are contributed through the registry, so adding one must not
  * require editing a union here. Unknown ids are caught at lookup — `ProviderRegistry.require`
  * throws listing the valid ids, and the factory falls back to the top-ranked provider rather
  * than crashing on a typo in settings.
  */
-export type ProviderId = string;
+export type { ProviderId } from './descriptor.types';
 
 // ── Tool schemas ─────────────────────────────────────────────
 

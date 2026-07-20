@@ -1,4 +1,5 @@
 import {
+  chatModelField,
   FieldValues,
   isSecretField,
   ProviderDescriptor,
@@ -115,6 +116,23 @@ export class ProviderSetupService {
     await this.store.write(descriptor, settings);
     await ProviderConfigStore.setActiveProvider(id);
     this.factory.invalidate(id);
+  }
+
+  /**
+   * Switches a provider's chat model, preserving its other settings.
+   *
+   * Deliberately not expressed as `save(id, { model })`. `ProviderConfigStore.write()`
+   * rebuilds a provider's settings entry from only the values it is handed, so a partial
+   * draft silently deletes every field it omits — a model switch would wipe the base URL,
+   * context window and embedding model. The read-merge lives here, once, rather than being
+   * repeated (and eventually forgotten) at each call site.
+   */
+  async setChatModel(id: ProviderId, model: string): Promise<void> {
+    const descriptor = this.registry.require(id);
+    const field = chatModelField(descriptor);
+    if (!field) throw new Error(`${descriptor.label} has no chat model field.`);
+
+    await this.save(id, { ...this.store.read(descriptor), [field.id]: model });
   }
 
   /** Which providers are ready to run, for annotating the picker without probing anything. */
