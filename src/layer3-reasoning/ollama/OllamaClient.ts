@@ -6,6 +6,7 @@ import { Readable } from 'stream';
 import { Logger } from '../../shared/Logger';
 import { OllamaHealthStatus, ModelInfo } from '../../shared/types/ollama.types';
 import { ModelClient } from '../../shared/types/agent.types';
+import { rankModels } from '../providers/ollamaModels';
 
 function customFetch(url: string, options: any = {}): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -98,6 +99,8 @@ function makeWebStream(nodeStream: any) {
 export class OllamaClient implements ModelClient {
   private client!: Ollama;
   private logger = Logger.getInstance();
+  /** Last model warned about as missing, so the notification does not repeat per turn. */
+  private warnedMissingModel: string | undefined;
 
   constructor() {
     this.updateConfig();
@@ -193,23 +196,67 @@ export class OllamaClient implements ModelClient {
     }
   }
 
+  /**
+   * The model to actually send to Ollama.
+   *
+   * The configured model may simply not be pulled — a default that ships with the
+   * extension certainly will not be, on a fresh install. Rather than failing with Ollama's
+   * bare "model not found", fall back to the best model the user does have, ranked by
+   * whether it can drive the agent's tool protocol.
+   *
+   * @throws when Ollama has no models at all, which no fallback can fix.
+   */
+  async resolveChatModel(): Promise<string> {
+    const config = vscode.workspace.getConfiguration('repo-intelligence');
+    const configured = config.get<string>('ollama.chatModel', 'qwen2.5-coder:7b');
+
+    const available = await this.listModels();
+    if (!available.length) {
+      throw new Error(
+        'Ollama has no models installed. Pull one first, for example:\n\n' +
+          '    ollama pull qwen2.5-coder:7b\n\n' +
+          'Then run "Repo Intelligence: Choose Model Provider" to select it.',
+      );
+    }
+
+    // Exact match, or a tag prefix — "qwen2.5-coder" should match "qwen2.5-coder:7b".
+    if (available.some((m) => m.name === configured || m.name.startsWith(`${configured}:`))) {
+      return configured;
+    }
+
+    const best = rankModels(
+      available.map((m) => ({ name: m.name, parameterSize: m.details?.parameterSize })),
+    )[0].name;
+
+    if (this.warnedMissingModel !== configured) {
+      this.warnedMissingModel = configured;
+      this.logger.warn(
+        `Configured Ollama model "${configured}" is not installed; using "${best}" instead. ` +
+          `Pull it with: ollama pull ${configured}`,
+      );
+      vscode.window
+        .showWarningMessage(
+          `Ollama model "${configured}" is not installed. Using "${best}" for now.`,
+          'Choose a model',
+        )
+        .then((choice) => {
+          if (choice) vscode.commands.executeCommand('repo-intelligence.chooseModelProvider');
+        });
+    }
+
+    return best;
+  }
+
   /** Stream completion response back to the webview UI. */
   async chatStream(
     messages: { role: string; content: string }[],
     onProgress: (chunk: string) => void,
     cancellationToken?: vscode.CancellationToken
   ): Promise<string> {
-    const config = vscode.workspace.getConfiguration('repo-intelligence');
-    let model = config.get<string>('ollama.chatModel', 'deepseek-coder-v2:16b');
+    let model = '';
 
     try {
-      const availableModels = await this.listModels();
-      if (availableModels.length > 0 && !availableModels.some(m => m.name === model || m.name.startsWith(model))) {
-        // Fallback to the best matching available model, prioritizing llama then gemma, or just using the first available
-        const fallback = availableModels.find(m => m.name.includes('llama') || m.name.includes('gemma') || m.name.includes('deepseek'));
-        model = fallback ? fallback.name : availableModels[0].name;
-        this.logger.info(`Configured chat model not found. Falling back to available model: ${model}`);
-      }
+      model = await this.resolveChatModel();
 
       const response = await this.client.chat({
         model,
@@ -233,10 +280,15 @@ export class OllamaClient implements ModelClient {
     }
   }
 
-  /** Non-streaming completion used by the structured agent protocol. */
+  /**
+   * Non-streaming completion used by the agent protocol.
+   *
+   * Goes through the same model resolution as `chatStream`. It previously did not, so a
+   * configured-but-not-installed model failed the agent outright while ordinary chat
+   * silently fell back — the agent is exactly where a clear failure matters most.
+   */
   async chatComplete(messages: { role: string; content: string }[]): Promise<string> {
-    const config = vscode.workspace.getConfiguration('repo-intelligence');
-    const model = config.get<string>('ollama.chatModel', 'deepseek-coder-v2:16b');
+    const model = await this.resolveChatModel();
     const response = await this.client.chat({ model, messages, stream: false, format: 'json' });
     return response.message.content;
   }
