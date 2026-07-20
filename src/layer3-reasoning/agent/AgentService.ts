@@ -18,6 +18,7 @@ import {
   LlmProvider,
   LlmToolResultBlock,
   LlmUsage,
+  ProviderId,
 } from '../providers/types';
 import { gitServiceFor } from '../../layer1-intelligence/git/GitService';
 import { FileStateTracker } from './FileStateTracker';
@@ -51,6 +52,8 @@ interface RunState {
   discoveryToolsUsed: number;
   /** Whether the search-first correction has already been spent. */
   nudgedToSearch: boolean;
+  /** Which provider served this run, so a resume on a different one can be refused. */
+  providerId: ProviderId;
 }
 
 /** Tools that count as having looked at the repository. */
@@ -111,7 +114,12 @@ export class AgentService {
           'set repo-intelligence.provider to "ollama".',
       );
     }
-    if (resolved.notice) vscode.window.showWarningMessage(resolved.notice);
+    if (resolved.notice) {
+      // Shown in the timeline as well as a toast: a toast is dismissible and vanishes from
+      // the record, and "which model actually ran?" needs to stay answerable afterwards.
+      vscode.window.showWarningMessage(resolved.notice);
+      this.container.chatWebviewProvider.showAgentLog(`⚠ ${resolved.notice}`);
+    }
 
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -119,8 +127,21 @@ export class AgentService {
     const run: AgentRun = { id, task, status: 'running', createdAt: now, updatedAt: now };
 
     this.container.database.run(
-      'INSERT INTO agent_runs (id, workspace_uri, session_id, mode, prompt, status, created_at, updated_at, turn_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, task.workspaceUri, sessionId ?? null, mode, prompt, run.status, now, now, 0],
+      'INSERT INTO agent_runs (id, workspace_uri, session_id, mode, prompt, status, created_at, updated_at, turn_count, provider_id, model_id, provider_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        task.workspaceUri,
+        sessionId ?? null,
+        mode,
+        prompt,
+        run.status,
+        now,
+        now,
+        0,
+        resolved.providerId,
+        resolved.model ?? null,
+        resolved.reason,
+      ],
     );
 
     const transcript = new TranscriptManager(resolved.provider.contextWindow);
@@ -135,6 +156,7 @@ export class AgentService {
       cancellation: new vscode.CancellationTokenSource(),
       discoveryToolsUsed: 0,
       nudgedToSearch: false,
+      providerId: resolved.providerId,
     };
     this.active.set(id, state);
 
@@ -557,8 +579,41 @@ export class AgentService {
       return;
     }
 
+    // Approval can sit pending for a long time, and the provider is re-resolved on resume —
+    // so the backend may have changed underneath us, either because the user switched it or
+    // because a fallback kicked in. The transcript holds provider-native blocks replayed
+    // verbatim (Anthropic thinking blocks carry signatures), so feeding them to a different
+    // backend is a correctness problem, not a cosmetic one. Refuse rather than guess.
+    if (resolved.providerId !== state.providerId && this.transcriptHasProviderNativeBlocks(state)) {
+      const message =
+        `This run started on "${state.providerId}" but "${resolved.providerId}" is active now. ` +
+        'Its conversation history is in a format the new provider cannot replay, so it has ' +
+        'been stopped rather than resumed. Your approved changes were applied — start a new ' +
+        'run to continue.';
+      this.logger.warn(message);
+      vscode.window.showWarningMessage(message);
+      this.finish(state, 'failed', message);
+      return;
+    }
+
     state.run.status = 'running';
     await this.loop(state, resolved.provider, workspace, state.run.task.mode);
+  }
+
+  /**
+   * Whether the transcript contains assistant content only the originating provider can
+   * interpret — thinking blocks, or tool calls whose ids were minted by that provider.
+   *
+   * A transcript of plain text is portable, so a provider switch mid-run is harmless there
+   * and the run is allowed to continue.
+   */
+  private transcriptHasProviderNativeBlocks(state: RunState): boolean {
+    return state.transcript.all().some(
+      (message) =>
+        message.role === 'assistant' &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === 'thinking' || block.type === 'tool_use'),
+    );
   }
 
   // ── Persistence and lifecycle ──────────────────────────────

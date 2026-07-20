@@ -50,8 +50,13 @@ export function registerCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REJECT_COMMAND, async () => { const commands = container.agentService.getPendingCommands(); const choice = await vscode.window.showQuickPick(commands.map(command => ({ label: `${command.command} ${command.args.join(' ')}`, command }))); if (choice) await container.agentService.rejectCommand(choice.command.id); }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REVERT_CHANGE_SET, async () => { const records = container.database.query<{ id: string; summary: string }>('SELECT id, summary FROM change_sets WHERE status = ? ORDER BY applied_at DESC', ['applied']); const choice = await vscode.window.showQuickPick(records.map(record => ({ label: record.summary, record }))); if (choice) await container.changeSetService.revert(choice.record.id); }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.SHOW_AGENT_HISTORY, () => {
-    const runs = container.database.query<{ mode: string; prompt: string; status: string; created_at: number }>('SELECT mode, prompt, status, created_at FROM agent_runs ORDER BY created_at DESC LIMIT 20');
-    container.chatWebviewProvider.showAgentLog(runs.map(run => `[${new Date(run.created_at).toLocaleString()}] ${run.mode} · ${run.status}\n${run.prompt}`).join('\n\n') || 'No agent runs yet.');
+    const runs = container.database.query<{ mode: string; prompt: string; status: string; created_at: number; provider_id: string | null; model_id: string | null; provider_reason: string | null }>('SELECT mode, prompt, status, created_at, provider_id, model_id, provider_reason FROM agent_runs ORDER BY created_at DESC LIMIT 20');
+    container.chatWebviewProvider.showAgentLog(runs.map(run => {
+      // Which backend served the run: a fallback can change it silently, and older rows
+      // predate the column entirely.
+      const served = run.provider_id ? `${run.provider_id}${run.model_id ? `/${run.model_id}` : ''}${run.provider_reason === 'fallback' ? ' (fallback)' : ''}` : 'provider not recorded';
+      return `[${new Date(run.created_at).toLocaleString()}] ${run.mode} · ${run.status} · ${served}\n${run.prompt}`;
+    }).join('\n\n') || 'No agent runs yet.');
   }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REVOKE_SESSION_TRUST, () => { container.agentService.revokeSessionTrust(); vscode.window.showInformationMessage('Agent session trust revoked.'); }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.CANCEL_AGENT, () => {

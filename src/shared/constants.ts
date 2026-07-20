@@ -85,4 +85,4 @@ export const DEFAULT_EXCLUDE_DIRS = new Set([
 
 // ── Database ──────────────────────────────────────────────────
 export const DB_FILENAME = 'repo-intelligence.db';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
