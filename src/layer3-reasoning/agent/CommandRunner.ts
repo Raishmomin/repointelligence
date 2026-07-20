@@ -15,7 +15,7 @@ export class CommandRunner {
       const timer = setTimeout(() => { killed = true; process.kill(); }, timeout);
       process.stdout.on('data', (chunk: Buffer) => output += chunk.toString()); process.stderr.on('data', (chunk: Buffer) => output += chunk.toString());
       process.on('error', error => { clearTimeout(timer); request.status = 'failed'; this.update(request, output + error.message, null); reject(error); });
-      process.on('close', (code: number | null) => { clearTimeout(timer); request.status = code === 0 ? 'completed' : killed ? 'cancelled' : 'failed'; this.update(request, output, code); code === 0 ? resolve(output) : reject(new Error(output || `Command exited with ${code}`)); });
+      process.on('close', (code: number | null) => { clearTimeout(timer); request.status = code === 0 ? 'completed' : killed ? 'cancelled' : 'failed'; this.update(request, output, code); if (code === 0) resolve(output); else reject(new Error(output || `Command exited with ${code}`)); });
     });
   }
   reject(request: CommandRequest): void { request.status = 'rejected'; this.update(request); }

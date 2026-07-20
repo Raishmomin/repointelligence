@@ -270,7 +270,7 @@ export class SymbolExtractor {
     else kind = 'variable';
 
     // Build signature
-    let signature = '';
+    let signature: string;
     if (isFunction) {
       const typeText = decl.getType().getText(decl);
       signature = `const ${name}: ${typeText.substring(0, 150)}`;

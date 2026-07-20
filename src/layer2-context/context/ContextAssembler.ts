@@ -52,7 +52,7 @@ export class ContextAssembler {
     );
     const dependencies: DependencyInfo[] = container.packageDetector.getKeyDependencies(packageInfo);
 
-    let searchResults = await this.searchEngine.search(projectId, query.userMessage, 15);
+    const searchResults = await this.searchEngine.search(projectId, query.userMessage, 15);
     // The current editor is always meaningful context, even when keyword retrieval
     // finds no overlap with the user's phrasing.
     const activeFile = query.activeFile;

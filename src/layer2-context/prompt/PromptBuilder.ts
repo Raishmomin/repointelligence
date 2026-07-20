@@ -104,7 +104,7 @@ ${query.userMessage}
     const framework = context.framework;
     const conventions = context.conventions.map(c => `- [${c.category.toUpperCase()}] ${c.rule}`).join('\n');
 
-    let basePrompt = `
+    const basePrompt = `
 You are a Principal Software Architect and Senior Developer specializing in ${framework.primary || 'fullstack software design'}.
 You are interacting offline-first with the Repository Intelligence Engine which scans and analyzes the codebase.
 

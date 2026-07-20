@@ -5,18 +5,15 @@ import * as vscode from 'vscode';
 import { ServiceContainer } from '../../container';
 import { FileOperation, ToolCall, ToolResult } from '../../shared/types/agent.types';
 import { classifyFileRisk, contentHash } from './AgentSafety';
+import { resolveAgentPath } from './pathGuard';
 
 export class WorkspaceTools {
   constructor(private readonly workspace: vscode.WorkspaceFolder) {}
   private get root(): string { return this.workspace.uri.fsPath; }
 
   resolve(relativePath: string): string {
-    if (!relativePath || path.isAbsolute(relativePath)) throw new Error('Agent paths must be relative to the selected workspace.');
-    const resolved = path.resolve(this.root, relativePath);
-    if (resolved !== this.root && !resolved.startsWith(this.root + path.sep)) throw new Error('Path escapes the selected workspace.');
     const ignored = vscode.workspace.getConfiguration('repo-intelligence').get<string[]>('agent.ignorePatterns', []);
-    if (ignored.some(pattern => relativePath.split('/').some(segment => segment === pattern))) throw new Error('Path is excluded by agent.ignorePatterns.');
-    return resolved;
+    return resolveAgentPath(this.root, relativePath, ignored);
   }
   async readFile(relativePath: string): Promise<string> { return fs.readFile(this.resolve(relativePath), 'utf8'); }
   async searchFiles(query: string): Promise<string> {
