@@ -10,6 +10,8 @@ import { FileWatcherManager } from './vscode/watchers/FileWatcherManager';
 import { KnowledgeTreeProvider } from './vscode/providers/KnowledgeTreeProvider';
 import { ChatWebviewProvider } from './vscode/providers/ChatWebviewProvider';
 import { ProposalContentProvider, PROPOSAL_SCHEME } from './vscode/providers/ProposalContentProvider';
+import { ProviderStatusBar } from './vscode/providers/ProviderStatusBar';
+import { migrateLegacyProviderConfig } from './layer3-reasoning/providers/migrateLegacyConfig';
 import { Logger } from './shared/Logger';
 import { EXTENSION_NAME } from './shared/constants';
 
@@ -17,6 +19,7 @@ let statusBar: StatusBarManager;
 let fileWatcher: FileWatcherManager;
 let knowledgeTreeProvider: KnowledgeTreeProvider;
 let chatWebviewProvider: ChatWebviewProvider;
+let providerStatusBar: ProviderStatusBar;
 
 /**
  * Extension activation.
@@ -66,6 +69,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(PROPOSAL_SCHEME, proposalProvider),
     proposalProvider,
   );
+
+  // 8. Carry pre-registry provider settings across, so the setup flow opens pre-filled
+  //    rather than showing defaults over the top of the user's existing choices.
+  const providerFactory = container.providerFactory;
+  await migrateLegacyProviderConfig(context, providerFactory.getRegistry(), providerFactory.getStore());
+
+  // 9. Show which backend is actually serving runs — a fallback can change it silently.
+  providerStatusBar = new ProviderStatusBar(providerFactory);
+  context.subscriptions.push({ dispose: () => providerStatusBar.dispose() });
 
   // 5. Auto-scan on open (if enabled)
   const config = vscode.workspace.getConfiguration('repo-intelligence');

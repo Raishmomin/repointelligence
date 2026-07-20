@@ -35,6 +35,12 @@
   "contributes": {
     "commands": [
       {
+        "command": "repo-intelligence.chooseModelProvider",
+        "title": "Choose Model Provider",
+        "category": "Repo Intelligence",
+        "icon": "$(server-environment)"
+      },
+      {
         "command": "repo-intelligence.scanRepository",
         "title": "Scan Repository",
         "category": "Repo Intelligence",
@@ -118,13 +124,13 @@
       },
       {
         "command": "repo-intelligence.setApiKey",
-        "title": "Set Anthropic API Key",
+        "title": "Set Provider API Key",
         "category": "Repo Intelligence",
         "icon": "$(key)"
       },
       {
         "command": "repo-intelligence.clearApiKey",
-        "title": "Clear Anthropic API Key",
+        "title": "Clear Provider API Key",
         "category": "Repo Intelligence"
       }
     ],
@@ -155,16 +161,8 @@
       "properties": {
         "repo-intelligence.provider": {
           "type": "string",
-          "enum": [
-            "anthropic",
-            "ollama"
-          ],
-          "enumDescriptions": [
-            "Claude via the Anthropic API. Requires an API key; needed for full agent autonomy.",
-            "Local models via Ollama. Fully offline and free, but weaker on complex multi-file tasks."
-          ],
           "default": "anthropic",
-          "description": "Which model backend the coding agent uses."
+          "markdownDescription": "Active model backend, by provider id. Use **Repo Intelligence: Choose Model Provider** to configure it \u2014 this is deliberately not an enum so new providers work without a schema change."
         },
         "repo-intelligence.anthropic.model": {
           "type": "string",
@@ -293,6 +291,35 @@
           "type": "boolean",
           "default": true,
           "description": "Whether the UI may offer in-memory session trust; commands always require approval"
+        },
+        "repo-intelligence.providers": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object"
+          },
+          "markdownDescription": "Per-provider settings, keyed by provider id. Managed by **Choose Model Provider**. Never contains API keys \u2014 those live in the OS keychain via SecretStorage."
+        },
+        "repo-intelligence.providerFallback": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Use another configured provider when the selected one is unavailable.",
+            "Fail the run instead of silently switching backend."
+          ],
+          "default": "auto",
+          "description": "What to do when the selected provider cannot be reached."
+        },
+        "repo-intelligence.providerFallbackOrder": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Provider ids to try, in order, when the selected one is unavailable. Empty means use each provider's own rank."
         }
       }
     },

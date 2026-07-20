@@ -24,6 +24,7 @@ export const COMMANDS = {
   SET_API_KEY: `${EXTENSION_ID}.setApiKey`,
   CLEAR_API_KEY: `${EXTENSION_ID}.clearApiKey`,
   CANCEL_AGENT: `${EXTENSION_ID}.cancelAgent`,
+  CHOOSE_MODEL_PROVIDER: `${EXTENSION_ID}.chooseModelProvider`,
 } as const;
 
 // ── Views ─────────────────────────────────────────────────────

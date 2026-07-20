@@ -262,6 +262,20 @@ export class ProviderFactory implements vscode.Disposable {
     return this.store;
   }
 
+  // Exposed so ProviderSetupService can build a throwaway provider from an unsaved draft,
+  // which is the only way to validate a configuration before committing it.
+  getSecrets(): vscode.SecretStorage {
+    return this.secrets;
+  }
+
+  getLogger(): Logger {
+    return this.logger;
+  }
+
+  getServices(): ProviderHost['services'] {
+    return { ollamaClient: this.ollamaClient };
+  }
+
   /** Cached availability for the status bar, which must never trigger a probe. */
   peekAvailability(id: ProviderId): boolean | undefined {
     return this.availability.peek(id);
