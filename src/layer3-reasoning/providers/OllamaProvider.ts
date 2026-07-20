@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Logger } from '../../shared/Logger';
 import { OllamaClient } from '../ollama/OllamaClient';
 import { describeToolsForPrompt, parseOllamaEnvelope } from './ollamaEnvelope';
+import { assessModel } from './ollamaModels';
 import {
   LlmContentBlock,
   LlmMessage,
@@ -25,6 +26,9 @@ export class OllamaProvider implements LlmProvider {
   readonly id = 'ollama' as const;
   readonly supportsNativeTools = false;
 
+  /** Last model warned about, so the notification does not repeat every availability check. */
+  private warnedAboutModel: string | undefined;
+
   constructor(
     private readonly client: OllamaClient,
     private readonly logger: Logger = Logger.getInstance(),
@@ -36,9 +40,46 @@ export class OllamaProvider implements LlmProvider {
       .get<number>('ollama.contextWindow', 32_000);
   }
 
+  /** The model this provider will actually use, for the status bar and run diagnostics. */
+  get modelId(): string {
+    return vscode.workspace
+      .getConfiguration('repo-intelligence')
+      .get<string>('ollama.chatModel', 'qwen2.5-coder:7b');
+  }
+
   async isAvailable(): Promise<boolean> {
     const health = await this.client.checkHealth();
+    if (health.available) this.warnIfModelTooSmall();
     return health.available;
+  }
+
+  /**
+   * Warns once per model about a model too small to drive the agent.
+   *
+   * Worth surfacing loudly: the symptom is the agent asking the user where files are, which
+   * reads as a broken extension rather than an under-powered model.
+   */
+  private warnIfModelTooSmall(): void {
+    const model = this.modelId;
+    if (this.warnedAboutModel === model) return;
+    this.warnedAboutModel = model;
+
+    const assessment = assessModel(model);
+    if (assessment.fitness === 'good' || !assessment.warning) return;
+
+    this.logger.warn(assessment.warning);
+    if (assessment.fitness === 'poor') {
+      vscode.window
+        .showWarningMessage(assessment.warning, 'Choose a different model')
+        .then((choice) => {
+          if (choice) {
+            vscode.commands.executeCommand(
+              'workbench.action.openSettings',
+              'repo-intelligence.ollama.chatModel',
+            );
+          }
+        });
+    }
   }
 
   async unavailableReason(): Promise<string | undefined> {

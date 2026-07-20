@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { ServiceContainer } from '../../container';
 import { EventBus } from '../../shared/EventBus';
@@ -46,7 +47,35 @@ interface RunState {
   turn: number;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
   cancellation: vscode.CancellationTokenSource;
+  /** How many times the agent has actually looked at the repository this run. */
+  discoveryToolsUsed: number;
+  /** Whether the search-first correction has already been spent. */
+  nudgedToSearch: boolean;
 }
+
+/** Tools that count as having looked at the repository. */
+const DISCOVERY_TOOLS = new Set(['read_file', 'glob', 'grep', 'query_index']);
+
+/**
+ * Whether a run that is about to end should instead be told to go and search.
+ *
+ * Triggers on "the agent never looked at the repository at all", which catches both the
+ * reported failure (asking the user for a path) and answering from thin air. Bounded to
+ * one correction per run so a model that genuinely has nothing to do still terminates.
+ */
+export function shouldNudgeToSearch(state: {
+  discoveryToolsUsed: number;
+  nudgedToSearch: boolean;
+}): boolean {
+  return state.discoveryToolsUsed === 0 && !state.nudgedToSearch;
+}
+
+export const SEARCH_FIRST_NUDGE =
+  '[You ended your turn without looking at the repository at all. You have glob (find ' +
+  'files by name), grep (search file contents) and query_index (search by concept). Use ' +
+  'them to find what you need — do not ask the user for a path or filename, since ' +
+  'searching is faster than asking. If you have already searched and genuinely cannot ' +
+  'proceed, say exactly what you searched for and what came back.]';
 
 /**
  * Runs the agent loop.
@@ -95,7 +124,7 @@ export class AgentService {
     );
 
     const transcript = new TranscriptManager(resolved.provider.contextWindow);
-    transcript.push({ role: 'user', content: prompt });
+    transcript.push({ role: 'user', content: await this.seedPrompt(prompt, resolved.provider, workspace) });
 
     const state: RunState = {
       run,
@@ -104,11 +133,65 @@ export class AgentService {
       turn: 0,
       usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
       cancellation: new vscode.CancellationTokenSource(),
+      discoveryToolsUsed: 0,
+      nudgedToSearch: false,
     };
     this.active.set(id, state);
 
     this.events.emit('agent:runStarted', { runId: id, prompt, mode });
     return this.loop(state, resolved.provider, workspace, mode);
+  }
+
+  /**
+   * Prepends relevant indexed code to the opening turn — but only for providers without
+   * native tool calling.
+   *
+   * A model driving real tools does better with a clean prompt and the freedom to search
+   * for what it decides it needs. A small local model on the JSON-envelope protocol often
+   * will not issue that first search at all, and having relevant code already in front of
+   * it is the difference between working and asking the user where the file is.
+   */
+  private async seedPrompt(
+    prompt: string,
+    provider: LlmProvider,
+    workspace: vscode.WorkspaceFolder,
+  ): Promise<string> {
+    if (provider.supportsNativeTools) return prompt;
+
+    try {
+      const project = this.container.database.queryOne<{ id: string }>(
+        'SELECT id FROM projects WHERE root_path = ?',
+        [workspace.uri.fsPath],
+      );
+      if (!project) return prompt;
+
+      const results = await this.container.hybridSearchEngine.search(project.id, prompt, 4);
+      if (!results.length) return prompt;
+
+      const budget = vscode.workspace
+        .getConfiguration('repo-intelligence')
+        .get<number>('agent.initialContextMaxChars', 8000);
+
+      let remaining = budget;
+      const sections: string[] = [];
+      for (const item of results) {
+        if (remaining <= 0) break;
+        const header = `--- ${path.relative(workspace.uri.fsPath, item.filePath)} ---\n`;
+        const body = item.content.slice(0, Math.max(0, remaining - header.length));
+        sections.push(header + body);
+        remaining -= header.length + body.length;
+      }
+
+      return (
+        `${prompt}\n\n[Possibly relevant code from the index. It may be incomplete or ` +
+        `wrong — use glob, grep and read_file to confirm and to find anything missing.]\n\n` +
+        sections.join('\n\n')
+      );
+    } catch (error) {
+      // Seeding is an optimisation; a failure here must not prevent the run.
+      this.logger.debug('Could not seed initial context', { error: String(error) });
+      return prompt;
+    }
   }
 
   cancel(runId: string): void {
@@ -188,6 +271,16 @@ export class AgentService {
         );
 
         if (!toolUses.length) {
+          // A turn that ends without the agent ever having looked at the repository is
+          // almost always the "please tell me where footer.ts is" failure — it has glob,
+          // grep and query_index, and asking the user is strictly slower than searching.
+          // Nudged at most once per run, so a model that genuinely has nothing to do
+          // still terminates on the next turn rather than looping.
+          if (shouldNudgeToSearch(state)) {
+            state.nudgedToSearch = true;
+            state.transcript.push({ role: 'user', content: SEARCH_FIRST_NUDGE });
+            continue;
+          }
           return this.finish(state, 'completed', textOf(result.content));
         }
 
@@ -268,6 +361,10 @@ export class AgentService {
 
     for (const call of toolUses) {
       const outcome = await this.registry.execute(call.name, call.input, context, mode);
+
+      // Counted on attempt rather than on success: a search that returned nothing still
+      // means the agent looked, and it should report that instead of being nudged again.
+      if (DISCOVERY_TOOLS.has(call.name)) state.discoveryToolsUsed++;
 
       if (outcome.kind === 'result') {
         pending.resolved[call.id] = { content: outcome.content, isError: outcome.isError };

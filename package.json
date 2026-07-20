@@ -206,8 +206,8 @@
         },
         "repo-intelligence.ollama.chatModel": {
           "type": "string",
-          "default": "gemma2:2b",
-          "description": "Default model for chat and code generation"
+          "default": "qwen2.5-coder:7b",
+          "markdownDescription": "Local model used for the agent. Needs to be capable enough to emit structured tool calls \u2014 a small general-purpose model will ask you where files are instead of searching. Recommended: `qwen2.5-coder:7b` or larger. Pull one with `ollama pull qwen2.5-coder:7b`."
         },
         "repo-intelligence.ollama.embeddingModel": {
           "type": "string",
