@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { ServiceContainer } from '../../container';
 import { ChangeSet, FileOperation } from '../../shared/types/agent.types';
 import { contentHash } from './AgentSafety';
+import { gitServiceFor } from '../../layer1-intelligence/git/GitService';
 
 export class ChangeSetService {
   private reindexTimer: ReturnType<typeof setTimeout> | undefined;
@@ -12,6 +13,11 @@ export class ChangeSetService {
   async apply(change: ChangeSet): Promise<void> {
     const workspace = vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === change.workspaceUri); if (!workspace) throw new Error('Selected workspace is no longer open.');
     for (const op of change.operations) await this.verify(workspace, op);
+    // Snapshot the working tree before touching anything. `git stash create` writes a
+    // dangling commit and mutates nothing else, so this is invisible to the user unless
+    // they revert. Best-effort: a non-repository workspace falls back to the per-operation
+    // content snapshots already carried on each FileOperation.
+    const checkpoint = gitServiceFor(workspace)?.createCheckpoint();
     const edit = new vscode.WorkspaceEdit();
     for (const op of change.operations) {
       const uri = vscode.Uri.joinPath(workspace.uri, op.path);
@@ -23,7 +29,7 @@ export class ChangeSetService {
     }
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code rejected the change set.');
     change.status = 'applied'; const now = Date.now();
-    this.container.database.transaction(() => { this.container.database.run('UPDATE change_sets SET status = ?, applied_at = ? WHERE id = ?', ['applied', now, change.id]); this.approval('change_set', change.id, true); }); this.container.database.save();
+    this.container.database.transaction(() => { this.container.database.run('UPDATE change_sets SET status = ?, applied_at = ?, checkpoint_ref = ? WHERE id = ?', ['applied', now, checkpoint?.ref ?? null, change.id]); this.approval('change_set', change.id, true); }); this.container.database.save();
     this.scheduleReindex();
   }
 
@@ -47,9 +53,27 @@ export class ChangeSetService {
   }
   reject(change: ChangeSet): void { change.status = 'rejected'; this.container.database.transaction(() => { this.container.database.run('UPDATE change_sets SET status = ? WHERE id = ?', ['rejected', change.id]); this.approval('change_set', change.id, false); }); this.container.database.save(); }
   async revert(id: string): Promise<void> {
-    const saved = this.container.database.queryOne<{ operations_json: string; workspace_uri: string }>('SELECT operations_json, workspace_uri FROM change_sets WHERE id = ? AND status = ?', [id, 'applied']); if (!saved) throw new Error('Applied change set not found.');
+    const saved = this.container.database.queryOne<{ operations_json: string; workspace_uri: string; checkpoint_ref: string | null }>('SELECT operations_json, workspace_uri, checkpoint_ref FROM change_sets WHERE id = ? AND status = ?', [id, 'applied']); if (!saved) throw new Error('Applied change set not found.');
     const workspace = vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === saved.workspace_uri); if (!workspace) throw new Error('Workspace is not open.');
-    const ops = JSON.parse(saved.operations_json) as FileOperation[]; const edit = new vscode.WorkspaceEdit();
+    const ops = JSON.parse(saved.operations_json) as FileOperation[];
+
+    // Prefer the git checkpoint: it restores the exact bytes from before the change,
+    // including anything the edit disturbed that the per-operation snapshots do not cover.
+    // Scoped to the touched paths so unrelated work since then survives. Dangling commits
+    // can be garbage collected, so its continued existence is checked rather than assumed.
+    const git = gitServiceFor(workspace);
+    if (saved.checkpoint_ref && git?.checkpointExists(saved.checkpoint_ref)) {
+      const paths = ops.flatMap(op => (op.newPath ? [op.path, op.newPath] : [op.path]));
+      if (git.restoreCheckpoint({ ref: saved.checkpoint_ref, createdAt: 0 }, paths)) {
+        this.container.database.run('UPDATE change_sets SET status = ? WHERE id = ?', ['reverted', id]);
+        this.container.database.save();
+        this.scheduleReindex();
+        return;
+      }
+    }
+
+    // Fallback: replay each operation backwards from its recorded before-content.
+    const edit = new vscode.WorkspaceEdit();
     for (const op of [...ops].reverse()) { const uri = vscode.Uri.joinPath(workspace.uri, op.path); if (op.kind === 'create') edit.deleteFile(uri, { ignoreIfNotExists: true }); else if (op.kind === 'edit' && op.beforeContent !== undefined) { const doc = await vscode.workspace.openTextDocument(uri); edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), op.beforeContent); } else if (op.kind === 'delete' && op.beforeContent !== undefined) { edit.createFile(uri, { ignoreIfExists: true }); edit.insert(uri, new vscode.Position(0, 0), op.beforeContent); } else if (op.kind === 'rename' && op.newPath) edit.renameFile(vscode.Uri.joinPath(workspace.uri, op.newPath), uri, { overwrite: false }); }
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code rejected the revert.'); this.container.database.run('UPDATE change_sets SET status = ? WHERE id = ?', ['reverted', id]); this.container.database.save();
   }

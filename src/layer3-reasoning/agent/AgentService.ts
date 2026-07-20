@@ -18,6 +18,7 @@ import {
   LlmToolResultBlock,
   LlmUsage,
 } from '../providers/types';
+import { gitServiceFor } from '../../layer1-intelligence/git/GitService';
 import { FileStateTracker } from './FileStateTracker';
 import { buildSystemPrompt } from './systemPrompt';
 import { ToolRegistry } from './ToolRegistry';
@@ -130,7 +131,15 @@ export class AgentService {
     const config = vscode.workspace.getConfiguration('repo-intelligence');
     const maxTurns = config.get<number>('agent.maxTurns', 30);
     const ignorePatterns = config.get<string[]>('agent.ignorePatterns', []);
-    const system = buildSystemPrompt(mode, { name: workspace.name });
+    // Knowing which files are already dirty materially improves targeting — those are
+    // almost always what the user is working on. Read once per run, not per turn: the
+    // system prompt sits at the front of the cached prefix and must not vary between turns.
+    const git = gitServiceFor(workspace);
+    const system = buildSystemPrompt(mode, {
+      name: workspace.name,
+      gitBranch: git?.getCurrentBranch(),
+      dirtyFiles: git?.getDirtyFiles(),
+    });
     const token = state.cancellation.token;
 
     // Detects a model looping on the same call — usually a tool erroring identically each
