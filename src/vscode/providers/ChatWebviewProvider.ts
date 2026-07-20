@@ -4,7 +4,6 @@
 
 import * as vscode from 'vscode';
 import { v4 as uuid } from 'uuid';
-import * as path from 'path';
 import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
 import { ProposalContentProvider } from './ProposalContentProvider';

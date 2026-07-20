@@ -64,4 +64,18 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // The webview runs in a browser, not the extension host: node globals are absent and
+    // DOM globals are present. Without this block the root config lints these files with
+    // `globals.node`, so `document` and `window` read as undefined.
+    files: ['webview-ui/src/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: { ...globals.browser },
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+    rules: {
+      // The webview talks to the host over postMessage, which is untyped at the boundary.
+      '@typescript-eslint/no-explicit-any': 'warn',
+    },
+  },
 );

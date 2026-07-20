@@ -1,12 +1,26 @@
+# Everything the VSIX does not need.
+#
+# NOTE: `webview-ui/**` excludes the UI *source* package (React tooling, node_modules,
+# configs — tens of MB). The built UI still ships because Vite emits to `out/webview/`,
+# which is not excluded. If that outDir ever moves back under `webview-ui/`, this line
+# silently ships a VSIX with no UI and you must add `!webview-ui/dist/**` here.
+# Verify any change to this file with: npx vsce ls
+
 .vscode/**
 .vscode-test/**
 src/**
 webview-ui/**
 test/**
+scratch/**
+scripts/**
 node_modules/**
-!node_modules/sql.js/dist/sql-wasm.wasm
+
 .gitignore
 tsconfig.json
 esbuild.js
+vitest.config.ts
+eslint.config.mjs
+implementation_plan.md
+
 **/*.ts
 **/*.map

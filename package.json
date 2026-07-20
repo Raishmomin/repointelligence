@@ -356,14 +356,16 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "node esbuild.js --production",
+    "build": "npm run build:webview && node esbuild.js --production",
     "watch": "node esbuild.js --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && cd webview-ui && npm run typecheck",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "vsce package"
+    "package": "vsce package",
+    "build:webview": "cd webview-ui && npm run build",
+    "build:extension": "node esbuild.js --production"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
