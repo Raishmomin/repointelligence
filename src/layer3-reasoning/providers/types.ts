@@ -9,7 +9,13 @@ import * as vscode from 'vscode';
  * events lets the loop — and the webview — treat both identically.
  */
 
-export type ProviderId = 'anthropic' | 'ollama';
+/**
+ * Open by design: providers are contributed through the registry, so adding one must not
+ * require editing a union here. Unknown ids are caught at lookup — `ProviderRegistry.require`
+ * throws listing the valid ids, and the factory falls back to the top-ranked provider rather
+ * than crashing on a typo in settings.
+ */
+export type ProviderId = string;
 
 // ── Tool schemas ─────────────────────────────────────────────
 
@@ -111,6 +117,13 @@ export interface LlmProvider {
    */
   readonly supportsNativeTools: boolean;
   readonly contextWindow: number;
+
+  /**
+   * The concrete model this provider will use right now — for the status bar and for
+   * recording which model actually served a run. Optional so existing implementations and
+   * test doubles are unaffected.
+   */
+  readonly modelId?: string;
 
   /** Whether the provider is configured and reachable. Never throws. */
   isAvailable(): Promise<boolean>;

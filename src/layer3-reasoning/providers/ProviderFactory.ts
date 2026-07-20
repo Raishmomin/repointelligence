@@ -1,91 +1,270 @@
 import * as vscode from 'vscode';
+import { EventBus } from '../../shared/EventBus';
 import { Logger } from '../../shared/Logger';
 import { OllamaClient } from '../ollama/OllamaClient';
-import { AnthropicProvider } from './AnthropicProvider';
-import { OllamaProvider } from './OllamaProvider';
+import {
+  chatModelField,
+  InvalidatableProvider,
+  isSecretField,
+  ProviderDescriptor,
+  ProviderHost,
+} from './descriptor';
+import { ProviderConfigStore } from './ProviderConfigStore';
+import { ProviderRegistry } from './ProviderRegistry';
+import {
+  AttemptedProvider,
+  AvailabilityCache,
+  EmbeddingResolution,
+  ProviderResolution,
+} from './resolution';
 import { LlmProvider, ProviderId } from './types';
 
 /**
- * Resolves the configured chat provider, and — separately — the embedding provider.
+ * Resolves which provider serves a request.
  *
- * These are deliberately distinct: the Anthropic API has no embeddings endpoint, so
- * semantic search always runs through Ollama even when Claude is driving the agent.
+ * Entirely registry-driven: no provider is named anywhere in this file, so adding one
+ * requires no change here.
  */
 export class ProviderFactory implements vscode.Disposable {
-  private anthropic: AnthropicProvider | undefined;
-  private ollama: OllamaProvider | undefined;
+  private readonly instances = new Map<ProviderId, LlmProvider>();
+  private readonly availability = new AvailabilityCache();
   private readonly subscriptions: vscode.Disposable[] = [];
 
   constructor(
     private readonly secrets: vscode.SecretStorage,
     private readonly ollamaClient: OllamaClient,
+    private readonly registry: ProviderRegistry = new ProviderRegistry(),
+    private readonly store: ProviderConfigStore = new ProviderConfigStore(secrets),
     private readonly logger: Logger = Logger.getInstance(),
+    private readonly events: EventBus = EventBus.getInstance(),
   ) {
     this.subscriptions.push(
       secrets.onDidChange((event) => {
-        if (event.key.startsWith('repo-intelligence.')) this.anthropic?.invalidate();
+        // Descriptor-driven: whichever provider declared this secret key is the one whose
+        // cached client is now stale.
+        for (const descriptor of this.registry.all()) {
+          const owns = descriptor.fields.some(
+            (field) => isSecretField(field) && field.secretKey === event.key,
+          );
+          if (owns) this.invalidate(descriptor.id);
+        }
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration('repo-intelligence.anthropic')) this.anthropic?.invalidate();
-        if (event.affectsConfiguration('repo-intelligence.ollama')) this.ollamaClient.updateConfig();
+        if (event.affectsConfiguration('repo-intelligence.provider')) {
+          this.availability.clear();
+        }
+        if (event.affectsConfiguration('repo-intelligence.providers')) {
+          this.instances.clear();
+          this.availability.clear();
+          this.ollamaClient.updateConfig();
+        }
+        // Legacy flat sections, until the migration is retired.
+        if (event.affectsConfiguration('repo-intelligence.ollama')) {
+          this.ollamaClient.updateConfig();
+          this.invalidate('ollama');
+        }
+        if (event.affectsConfiguration('repo-intelligence.anthropic')) {
+          this.invalidate('anthropic');
+        }
       }),
     );
   }
 
+  // ── Lookup ─────────────────────────────────────────────────
+
+  /** The configured id, or the top-ranked provider when it names something unregistered. */
   get configuredProviderId(): ProviderId {
-    return vscode.workspace
-      .getConfiguration('repo-intelligence')
-      .get<ProviderId>('provider', 'anthropic');
+    const configured = ProviderConfigStore.configuredProviderId();
+    if (this.registry.get(configured)) return configured;
+
+    const fallback = this.registry.byFallbackRank()[0];
+    this.logger.warn(
+      `Configured provider "${configured}" is not registered; using "${fallback.id}".`,
+    );
+    return fallback.id;
   }
 
-  /** The provider the agent loop should use, per settings. */
-  getChatProvider(): LlmProvider {
-    return this.configuredProviderId === 'ollama' ? this.getOllama() : this.getAnthropic();
+  instance(id: ProviderId): LlmProvider {
+    const existing = this.instances.get(id);
+    if (existing) return existing;
+
+    const descriptor = this.registry.require(id);
+    const created = descriptor.create(this.hostFor(descriptor));
+    this.instances.set(id, created);
+    return created;
   }
+
+  getChatProvider(): LlmProvider {
+    return this.instance(this.configuredProviderId);
+  }
+
+  private hostFor(descriptor: ProviderDescriptor): ProviderHost {
+    return {
+      secrets: this.secrets,
+      config: this.store.context(descriptor),
+      logger: this.logger,
+      services: { ollamaClient: this.ollamaClient },
+    };
+  }
+
+  invalidate(id: ProviderId): void {
+    const instance = this.instances.get(id) as Partial<InvalidatableProvider> | undefined;
+    if (instance?.invalidate) instance.invalidate();
+    else this.instances.delete(id);
+    this.availability.delete(id);
+  }
+
+  // ── Resolution ─────────────────────────────────────────────
 
   /**
-   * Returns the configured provider if it is usable, otherwise falls back to the other one
-   * and explains why. Returns undefined when neither is available.
+   * The configured provider if usable, otherwise the best available alternative.
+   *
+   * Candidates are filtered by `isConfigured()` first, which touches only settings and
+   * SecretStorage — so an unconfigured provider never costs a network probe.
    */
-  async resolveChatProvider(): Promise<{ provider: LlmProvider; notice?: string } | undefined> {
-    const preferred = this.getChatProvider();
-    if (await preferred.isAvailable()) return { provider: preferred };
+  async resolveChatProvider(): Promise<ProviderResolution | undefined> {
+    const preferredId = this.configuredProviderId;
+    const preferred = this.instance(preferredId);
 
-    const preferredReason = await preferred.unavailableReason();
-    const alternate = preferred.id === 'anthropic' ? this.getOllama() : this.getAnthropic();
-
-    if (await alternate.isAvailable()) {
-      const notice = `${preferredReason} Falling back to ${alternate.id}.`;
-      this.logger.warn(notice);
-      return { provider: alternate, notice };
+    if (await this.availability.check(preferredId, () => preferred.isAvailable())) {
+      return this.record(preferredId, preferred, { reason: 'configured', attempted: [] });
     }
 
-    const alternateReason = await alternate.unavailableReason();
-    this.logger.error(`No LLM provider available. ${preferredReason} ${alternateReason}`);
+    const preferredReason = await preferred.unavailableReason();
+    const attempted: AttemptedProvider[] = [{ id: preferredId, reason: preferredReason }];
+
+    const mode = vscode.workspace
+      .getConfiguration('repo-intelligence')
+      .get<'auto' | 'off'>('providerFallback', 'auto');
+
+    if (mode === 'off') {
+      this.logger.error(
+        `Provider "${preferredId}" is unavailable and fallback is off. ${preferredReason ?? ''}`,
+      );
+      return undefined;
+    }
+
+    for (const descriptor of this.fallbackCandidates(preferredId)) {
+      if (!(await this.store.isConfigured(descriptor))) {
+        attempted.push({ id: descriptor.id, reason: 'not configured' });
+        continue;
+      }
+
+      const candidate = this.instance(descriptor.id);
+      if (await this.availability.check(descriptor.id, () => candidate.isAvailable())) {
+        return this.record(descriptor.id, candidate, {
+          reason: 'fallback',
+          fallbackFrom: preferredId,
+          notice: `${preferredReason ?? `${preferredId} is unavailable.`} Falling back to ${descriptor.label}.`,
+          attempted,
+        });
+      }
+      attempted.push({ id: descriptor.id, reason: await candidate.unavailableReason() });
+    }
+
+    this.logger.error('No language model provider is available.', { attempted });
     return undefined;
   }
 
+  /** Explicit user order if pinned, else descending rank. Never includes the excluded id. */
+  private fallbackCandidates(exclude: ProviderId): ProviderDescriptor[] {
+    const pinned = vscode.workspace
+      .getConfiguration('repo-intelligence')
+      .get<string[]>('providerFallbackOrder', []);
+
+    const ordered = pinned.length
+      ? pinned
+          .map((id) => this.registry.get(id))
+          .filter((descriptor): descriptor is ProviderDescriptor => !!descriptor)
+      : this.registry.byFallbackRank();
+
+    return ordered.filter(
+      (descriptor) => descriptor.id !== exclude && descriptor.capabilities.chat,
+    );
+  }
+
+  private record(
+    id: ProviderId,
+    provider: LlmProvider,
+    parts: Pick<ProviderResolution, 'reason' | 'attempted'> &
+      Partial<Pick<ProviderResolution, 'notice' | 'fallbackFrom'>>,
+  ): ProviderResolution {
+    const descriptor = this.registry.require(id);
+    const model = provider.modelId ?? this.configuredModelFor(descriptor);
+
+    const resolution: ProviderResolution = {
+      provider,
+      providerId: id,
+      providerLabel: descriptor.label,
+      model,
+      resolvedAt: Date.now(),
+      ...parts,
+    };
+
+    this.logger.info(
+      `Model provider resolved: ${id}/${model ?? 'unknown model'} (${parts.reason})`,
+    );
+    this.events.emit('provider:resolved', {
+      providerId: id,
+      providerLabel: descriptor.label,
+      model,
+      reason: parts.reason,
+      fallbackFrom: parts.fallbackFrom,
+    });
+
+    return resolution;
+  }
+
+  /** Falls back to the descriptor's declared chat-model field when a provider omits `modelId`. */
+  private configuredModelFor(descriptor: ProviderDescriptor): string | undefined {
+    const field = chatModelField(descriptor);
+    if (!field) return undefined;
+    const value = this.store.read(descriptor)[field.id];
+    return value === undefined ? undefined : String(value);
+  }
+
+  // ── Embeddings ─────────────────────────────────────────────
+
   /**
-   * Embeddings only ever come from Ollama. Returns undefined when it is unreachable, in
-   * which case retrieval degrades to keyword-only.
+   * Picks an embedding-capable provider, preferring the chat provider when it can embed so
+   * a second backend is not involved unnecessarily. Independent of the chat provider
+   * otherwise — Anthropic has no embeddings endpoint, so a Claude user still embeds locally.
    */
-  async getEmbeddingProvider(): Promise<OllamaClient | undefined> {
-    const health = await this.ollamaClient.checkHealth();
-    if (!health.available) {
-      this.logger.info('Ollama unavailable; semantic search disabled, using keyword retrieval only.');
-      return undefined;
+  async resolveEmbeddingProvider(): Promise<EmbeddingResolution | undefined> {
+    const chatId = this.configuredProviderId;
+    const capable = this.registry.embedCapable();
+    const ordered = [
+      ...capable.filter((descriptor) => descriptor.id === chatId),
+      ...capable
+        .filter((descriptor) => descriptor.id !== chatId)
+        .sort((a, b) => b.fallbackRank - a.fallbackRank),
+    ];
+
+    for (const descriptor of ordered) {
+      if (!(await this.store.isConfigured(descriptor))) continue;
+      const embedder = descriptor.createEmbedder!(this.hostFor(descriptor));
+      if (await embedder.isAvailable()) {
+        return { providerId: descriptor.id, embed: (texts) => embedder.embed(texts) };
+      }
     }
-    return this.ollamaClient;
+
+    this.logger.info('No embedding provider available; retrieval stays keyword-only.');
+    return undefined;
   }
 
-  private getAnthropic(): AnthropicProvider {
-    if (!this.anthropic) this.anthropic = new AnthropicProvider(this.secrets, this.logger);
-    return this.anthropic;
+  // ── Introspection for the setup UI ─────────────────────────
+
+  getRegistry(): ProviderRegistry {
+    return this.registry;
   }
 
-  private getOllama(): OllamaProvider {
-    if (!this.ollama) this.ollama = new OllamaProvider(this.ollamaClient, this.logger);
-    return this.ollama;
+  getStore(): ProviderConfigStore {
+    return this.store;
+  }
+
+  /** Cached availability for the status bar, which must never trigger a probe. */
+  peekAvailability(id: ProviderId): boolean | undefined {
+    return this.availability.peek(id);
   }
 
   dispose(): void {

@@ -70,6 +70,17 @@ export interface EventMap {
     usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
   };
   'agent:error': { runId: string; message: string };
+
+  // Which model backend is in play. `provider:resolved` fires per run and reports what
+  // actually served it, which may differ from the configured provider after a fallback.
+  'provider:changed': { providerId: string; model?: string };
+  'provider:resolved': {
+    providerId: string;
+    providerLabel: string;
+    model?: string;
+    reason: 'configured' | 'fallback';
+    fallbackFrom?: string;
+  };
 }
 
 type EventHandler<T> = (payload: T) => void;

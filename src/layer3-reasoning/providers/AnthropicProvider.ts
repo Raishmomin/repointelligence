@@ -32,6 +32,11 @@ export class AnthropicProvider implements LlmProvider {
     return capabilitiesFor(this.model).contextWindow;
   }
 
+  /** The model this provider will use, for the status bar and run diagnostics. */
+  get modelId(): string {
+    return this.model;
+  }
+
   private get model(): string {
     return vscode.workspace
       .getConfiguration('repo-intelligence')
