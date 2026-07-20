@@ -366,7 +366,7 @@
     "typecheck": "tsc --noEmit && cd webview-ui && npm run typecheck",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "test": "vitest run",
+    "test": "vitest run && cd webview-ui && npm test",
     "test:watch": "vitest",
     "package": "vsce package",
     "build:webview": "cd webview-ui && npm run build",
