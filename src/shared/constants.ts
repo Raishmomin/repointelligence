@@ -21,6 +21,8 @@ export const COMMANDS = {
   REVERT_CHANGE_SET: `${EXTENSION_ID}.revertChangeSet`,
   SHOW_AGENT_HISTORY: `${EXTENSION_ID}.showAgentHistory`,
   REVOKE_SESSION_TRUST: `${EXTENSION_ID}.revokeSessionTrust`,
+  SET_API_KEY: `${EXTENSION_ID}.setApiKey`,
+  CLEAR_API_KEY: `${EXTENSION_ID}.clearApiKey`,
 } as const;
 
 // ── Views ─────────────────────────────────────────────────────

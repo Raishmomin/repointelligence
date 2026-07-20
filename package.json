@@ -109,6 +109,17 @@
         "command": "repo-intelligence.revokeSessionTrust",
         "title": "Revoke Agent Session Trust",
         "category": "Repo Intelligence"
+      },
+      {
+        "command": "repo-intelligence.setApiKey",
+        "title": "Set Anthropic API Key",
+        "category": "Repo Intelligence",
+        "icon": "$(key)"
+      },
+      {
+        "command": "repo-intelligence.clearApiKey",
+        "title": "Clear Anthropic API Key",
+        "category": "Repo Intelligence"
       }
     ],
     "viewsContainers": {
@@ -136,6 +147,52 @@
     "configuration": {
       "title": "Repo Intelligence",
       "properties": {
+        "repo-intelligence.provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "ollama"
+          ],
+          "enumDescriptions": [
+            "Claude via the Anthropic API. Requires an API key; needed for full agent autonomy.",
+            "Local models via Ollama. Fully offline and free, but weaker on complex multi-file tasks."
+          ],
+          "default": "anthropic",
+          "description": "Which model backend the coding agent uses."
+        },
+        "repo-intelligence.anthropic.model": {
+          "type": "string",
+          "enum": [
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "enumDescriptions": [
+            "Most capable; best for long multi-file agent runs.",
+            "Near-Opus quality on coding at lower cost.",
+            "Fastest and cheapest; best for simple, scoped edits."
+          ],
+          "default": "claude-opus-4-8",
+          "description": "Claude model used for agent runs."
+        },
+        "repo-intelligence.anthropic.effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "high",
+          "markdownDescription": "Reasoning depth and token spend. `xhigh` suits the hardest agentic coding; `low` suits quick scoped edits. Ignored by Claude Haiku 4.5, which does not support this setting."
+        },
+        "repo-intelligence.ollama.contextWindow": {
+          "type": "number",
+          "default": 32000,
+          "minimum": 4096,
+          "description": "Assumed context window of the local Ollama model, used to decide when to compact the agent transcript."
+        },
         "repo-intelligence.ollama.url": {
           "type": "string",
           "default": "http://127.0.0.1:11434",

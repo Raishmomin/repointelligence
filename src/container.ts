@@ -16,6 +16,7 @@ import { PackageDetector } from './layer1-intelligence/packages/PackageDetector'
 import { ASTParser } from './layer1-intelligence/ast/ASTParser';
 import { DependencyGraph } from './layer1-intelligence/graph/DependencyGraph';
 import { OllamaClient } from './layer3-reasoning/ollama/OllamaClient';
+import { ProviderFactory } from './layer3-reasoning/providers/ProviderFactory';
 import { HybridSearchEngine } from './layer2-context/search/HybridSearchEngine';
 import { ContextAssembler } from './layer2-context/context/ContextAssembler';
 import { PromptBuilder } from './layer2-context/prompt/PromptBuilder';
@@ -120,6 +121,13 @@ export class ServiceContainer {
     return this.getOrCreate('ollamaClient', () => new OllamaClient());
   }
 
+  get providerFactory(): ProviderFactory {
+    return this.getOrCreate(
+      'providerFactory',
+      () => new ProviderFactory(this.context.secrets, this.ollamaClient),
+    );
+  }
+
   get hybridSearchEngine(): HybridSearchEngine {
     return this.getOrCreate('hybridSearchEngine', () => new HybridSearchEngine(this.database, this.ollamaClient));
   }
@@ -151,6 +159,9 @@ export class ServiceContainer {
   async dispose(): Promise<void> {
     if (this.services.has('astParser')) {
       this.astParser.dispose();
+    }
+    if (this.services.has('providerFactory')) {
+      this.providerFactory.dispose();
     }
     this.database.close();
     this.logger.dispose();

@@ -5,6 +5,7 @@
 import * as vscode from 'vscode';
 import { COMMANDS } from '../../shared/constants';
 import { scanRepository } from './scanRepository';
+import { clearApiKey, setApiKey } from './manageApiKey';
 
 import { ServiceContainer } from '../../container';
 
@@ -19,6 +20,11 @@ export function registerCommands(context: vscode.ExtensionContext): void {
   // Scan Repository
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMANDS.SCAN_REPOSITORY, scanRepository),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMANDS.SET_API_KEY, () => setApiKey(context)),
+    vscode.commands.registerCommand(COMMANDS.CLEAR_API_KEY, () => clearApiKey(context)),
   );
 
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.START_AGENT, async () => {
