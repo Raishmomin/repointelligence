@@ -82,11 +82,20 @@ npm run build
 
 Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
 
-**With Claude:** run `Repo Intelligence: Set Anthropic API Key` from the command palette. The key is stored in VS Code's `SecretStorage` — never in `settings.json`, never in the repo.
+Run **`Repo Intelligence: Choose Model Provider`** from the command palette. It walks you through picking a backend and configuring it:
 
-**With Ollama:** install [Ollama](https://ollama.com), then `ollama pull qwen2.5-coder:7b`. Set `repo-intelligence.provider` to `ollama`.
+- **Claude** — prompts for an API key, then a model. The key is stored in the OS keychain via `SecretStorage`, never in `settings.json`.
+- **Ollama** — prompts for the server URL, then lists the models you have actually pulled, ranked by whether they can drive the agent. Install [Ollama](https://ollama.com) and `ollama pull qwen2.5-coder:7b` first.
+
+The setup flow validates against the live backend before saving, and the status bar shows which provider and model are active — turning amber if a run falls back to a different backend than the one you chose.
 
 Then run `Repo Intelligence: Scan Repository` and open the Repo Intelligence view in the activity bar.
+
+> **Model choice matters more than anything else here.** The agent works by emitting structured tool calls. A small general-purpose local model cannot do that reliably, and the way it fails is by replying in prose — often by asking *you* where a file is instead of searching for it. Anything under about 7B parameters will do this. The model picker flags it, but it is worth knowing why.
+
+### Adding a provider
+
+A new backend is one implementation file, one descriptor, and one line in [src/layer3-reasoning/providers/registry.ts](src/layer3-reasoning/providers/registry.ts). The descriptor declares what configuration the provider needs — secrets, URLs, fixed or dynamically-listed models — and that single declaration drives the setup wizard, validation, the status bar, and the fallback chain. No changes to `ProviderFactory`, no union type to extend, no `package.json` edit.
 
 ---
 
@@ -130,6 +139,8 @@ Not automated; run before releasing.
 - Brute-force cosine similarity is fine to roughly 50k vectors; beyond that, retrieval will visibly stall.
 - Approving a change re-indexes the whole repository (debounced to once per burst). A genuinely incremental re-index is not implemented.
 - A run parked awaiting approval lives in memory. Its transcript is persisted, but reloading the window before deciding abandons the run rather than resuming it.
+- Switching provider while a run is parked for approval stops that run rather than resuming it — the conversation history contains provider-specific blocks that cannot be replayed elsewhere. Approved changes are still applied; you just start a new run to continue.
+- Provider settings do not deep-merge across scopes: a workspace-level entry for a provider fully shadows the global one for that provider.
 - The chat panel renders the agent timeline read-only; approving still goes through the command palette.
 
 ## License
