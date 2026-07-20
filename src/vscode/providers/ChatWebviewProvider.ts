@@ -8,6 +8,7 @@ import * as path from 'path';
 import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
 import { ProposalContentProvider } from './ProposalContentProvider';
+import { AgentStreamBridge } from './AgentStreamBridge';
 import { EventBus } from '../../shared/EventBus';
 import { ChatMessage } from '../../shared/types/context.types';
 import { AgentRun, ChangeSet, CommandRequest } from '../../shared/types/agent.types';
@@ -19,11 +20,17 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private activeSessionId: string | null = null;
   private activeProjectId: string | null = null;
 
+  private readonly agentStream = new AgentStreamBridge(message => this.postToWebview(message));
+
   constructor() {
     EventBus.getInstance().on('scan:completed', async (result) => {
       this.activeProjectId = result.projectId;
       await this.handleReady();
     });
+  }
+
+  public dispose(): void {
+    this.agentStream.dispose();
   }
 
   /** Trigger a programmatic prompt from editor context commands */
@@ -548,6 +555,54 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     @keyframes agent-spin { to { transform: rotate(360deg); } }
 
     /* Diff block styles */
+    /* Live agent timeline. Colours come from VS Code theme variables so the panel
+       matches whatever theme the user has, light or dark. */
+    .agent-panel {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 6px;
+      margin: 8px 0;
+      overflow: hidden;
+      background: var(--vscode-editor-background);
+    }
+    .agent-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: var(--vscode-editorWidget-background);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .agent-panel-title { font-weight: 600; }
+    .agent-panel-turn { opacity: 0.65; }
+    .agent-panel-body { padding: 6px 10px; }
+    .agent-row {
+      padding: 3px 0;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .agent-text { color: var(--vscode-foreground); }
+    .agent-thinking { color: var(--vscode-descriptionForeground); font-style: italic; }
+    .agent-tool { font-family: var(--vscode-editor-font-family); font-size: 11px; }
+    .agent-tool-running { color: var(--vscode-descriptionForeground); }
+    .agent-tool-ok { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
+    .agent-tool-error { color: var(--vscode-testing-iconFailed, var(--vscode-charts-red)); }
+    .agent-approval {
+      color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
+      font-weight: 500;
+    }
+    .agent-finished {
+      color: var(--vscode-descriptionForeground);
+      border-top: 1px solid var(--vscode-panel-border);
+      margin-top: 4px;
+      padding-top: 6px;
+    }
+    .agent-error { color: var(--vscode-errorForeground); }
+
     .diff-container {
       border: 1px solid var(--vscode-panel-border);
       border-radius: 4px; margin: 8px 0; overflow: hidden;
@@ -871,6 +926,84 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       return html;
     }
 
+
+    // ── Live agent timeline ────────────────────────────────────
+    // Steps arrive pre-batched from the extension host (~50ms windows), so this only
+    // needs to append; it never sees individual tokens.
+    let agentPanel = null;
+    let agentRunId = null;
+    const agentToolRows = {};
+
+    function ensureAgentPanel(runId) {
+      if (agentPanel && agentRunId === runId) return agentPanel;
+      agentRunId = runId;
+      for (const key of Object.keys(agentToolRows)) delete agentToolRows[key];
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'agent-panel';
+      wrapper.innerHTML = '<div class="agent-panel-header">'
+        + '<span class="agent-panel-title">Agent</span>'
+        + '<span class="agent-panel-turn"></span>'
+        + '</div><div class="agent-panel-body"></div>';
+      chatArea.appendChild(wrapper);
+      agentPanel = wrapper;
+      return wrapper;
+    }
+
+    function agentRow(className, text) {
+      const row = document.createElement('div');
+      row.className = 'agent-row ' + className;
+      row.textContent = text;
+      return row;
+    }
+
+    function renderAgentStream(data) {
+      const panel = ensureAgentPanel(data.runId);
+      const body = panel.querySelector('.agent-panel-body');
+      const turnLabel = panel.querySelector('.agent-panel-turn');
+
+      for (const step of data.steps) {
+        if (step.kind === 'turn') {
+          turnLabel.textContent = 'turn ' + step.turn + '/' + step.maxTurns;
+        } else if (step.kind === 'text') {
+          // Consecutive text merges into the same paragraph so streaming reads naturally.
+          const last = body.lastElementChild;
+          if (last && last.classList.contains('agent-text')) last.textContent += step.text;
+          else body.appendChild(agentRow('agent-text', step.text));
+        } else if (step.kind === 'thinking') {
+          const last = body.lastElementChild;
+          if (last && last.classList.contains('agent-thinking')) last.textContent += step.text;
+          else body.appendChild(agentRow('agent-thinking', step.text));
+        } else if (step.kind === 'tool') {
+          let row = agentToolRows[step.toolCallId];
+          if (!row) {
+            row = agentRow('agent-tool', '');
+            agentToolRows[step.toolCallId] = row;
+            body.appendChild(row);
+          }
+          const icon = step.status === 'running' ? '\u25CB' : step.status === 'ok' ? '\u2713' : '\u2717';
+          row.className = 'agent-row agent-tool agent-tool-' + step.status;
+          row.textContent = icon + ' ' + step.name + (step.preview ? ' \u2014 ' + step.preview : '');
+        } else if (step.kind === 'approval') {
+          const count = step.changeSetIds.length + step.commandIds.length;
+          body.appendChild(agentRow('agent-approval',
+            '\u23F8 Waiting for your approval on ' + count + ' proposed action' + (count === 1 ? '' : 's') +
+            ' \u2014 run "Repo Intelligence: Approve Pending Change Set"'));
+        } else if (step.kind === 'finished') {
+          const cache = step.usage.cacheReadTokens ? ', ' + step.usage.cacheReadTokens + ' cached' : '';
+          body.appendChild(agentRow('agent-finished',
+            step.status + ' after ' + step.turns + ' turn' + (step.turns === 1 ? '' : 's') +
+            ' (' + step.usage.inputTokens + ' in, ' + step.usage.outputTokens + ' out' + cache + ')'));
+          agentPanel = null;
+        } else if (step.kind === 'error') {
+          body.appendChild(agentRow('agent-error', '\u26A0 ' + step.message));
+          agentPanel = null;
+        }
+      }
+
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
     window.addEventListener('message', event => {
       const data = event.data;
       switch (data.type) {
@@ -947,6 +1080,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'agentTimeline':
           appendBubble('assistant', data.content);
           chatArea.scrollTop = chatArea.scrollHeight;
+          break;
+
+        case 'agentStream':
+          renderAgentStream(data);
           break;
 
         case 'error':
