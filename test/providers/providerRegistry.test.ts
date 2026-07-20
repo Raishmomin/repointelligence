@@ -140,27 +140,44 @@ describe('ProviderRegistry', () => {
 
   describe('adding a provider costs one registry entry', () => {
     it('picks up a new provider with no other change', () => {
-      // The whole point of the registry: this is what adding OpenRouter looks like.
-      const withNew = new ProviderRegistry([...PROVIDER_DESCRIPTORS, descriptor({ id: 'openrouter', fallbackRank: 50 })]);
+      // The whole point of the registry: this is what adding a vendor looks like.
+      const withNew = new ProviderRegistry([
+        ...PROVIDER_DESCRIPTORS,
+        descriptor({ id: 'mistral', fallbackRank: 65 }),
+      ]);
 
-      expect(withNew.get('openrouter')).toBeDefined();
-      expect(withNew.chatCapable().map((d) => d.id)).toContain('openrouter');
-      // And it slots into the fallback chain by rank, between anthropic (100) and ollama (10).
-      expect(withNew.byFallbackRank().map((d) => d.id)).toEqual(['anthropic', 'openrouter', 'ollama']);
+      expect(withNew.get('mistral')).toBeDefined();
+      expect(withNew.chatCapable().map((d) => d.id)).toContain('mistral');
+
+      // And it slots into the fallback chain purely by rank, with no code change.
+      const ranked = withNew.byFallbackRank().map((d) => d.id);
+      expect(ranked.indexOf('mistral')).toBeGreaterThan(ranked.indexOf('anthropic'));
+      expect(ranked.indexOf('mistral')).toBeLessThan(ranked.indexOf('ollama'));
     });
   });
 
   describe('the real registry', () => {
-    it('registers anthropic and ollama with unique ids', () => {
+    it('registers every shipped provider with unique ids', () => {
       const registry = new ProviderRegistry();
-      expect(registry.ids().sort()).toEqual(['anthropic', 'ollama']);
+      expect(registry.ids().sort()).toEqual([
+        'anthropic',
+        'gemini',
+        'groq',
+        'nvidia',
+        'ollama',
+        'openai',
+        'openrouter',
+      ]);
     });
 
     it('ranks the local provider last, so a cloud run is never quietly downgraded first', () => {
       expect(new ProviderRegistry().byFallbackRank().at(-1)?.id).toBe('ollama');
     });
 
-    it('offers only ollama for embeddings — Anthropic has no embeddings endpoint', () => {
+    it('offers only ollama for embeddings', () => {
+      // Anthropic has no embeddings endpoint, and the OpenAI-compatible vendors are held
+      // back deliberately: the index has no per-row model identity, so a second embedder
+      // would write incompatible-dimension vectors into it with no error.
       expect(new ProviderRegistry().embedCapable().map((d) => d.id)).toEqual(['ollama']);
     });
 

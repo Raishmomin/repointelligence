@@ -1,6 +1,7 @@
 import { anthropicDescriptor } from './anthropic.descriptor';
 import { ProviderDescriptor } from './descriptor';
 import { ollamaDescriptor } from './ollama.descriptor';
+import { OPENAI_COMPAT_DESCRIPTORS } from './openai-compat/descriptors';
 
 /**
  * Every provider the extension knows about.
@@ -13,4 +14,7 @@ import { ollamaDescriptor } from './ollama.descriptor';
 export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
   anthropicDescriptor,
   ollamaDescriptor,
+  // OpenAI, Gemini, OpenRouter, Groq and Nvidia NIM — one entry each, generated from the
+  // vendor table since they share the OpenAI-compatible dialect.
+  ...OPENAI_COMPAT_DESCRIPTORS,
 ];
