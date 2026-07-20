@@ -2,7 +2,7 @@
 
 A VS Code extension that indexes your codebase into a local knowledge base, then uses it to ground an approval-gated coding agent. The agent reads freely, edits surgically, and stops for your approval before it writes anything to disk or runs any command.
 
-Works against **Claude** (via the Anthropic API) for full autonomy, or **Ollama** for a fully local, offline setup.
+Works against **Claude**, **OpenAI**, **Gemini**, **OpenRouter**, **Groq** and **Nvidia NIM** via an API key, or **Ollama** for a fully local, offline setup. Adding another backend is one file and one registry line.
 
 ---
 
@@ -40,10 +40,10 @@ Runs the agent loop.
 
 | Module | Responsibility |
 |---|---|
-| `providers/` | `LlmProvider` abstraction over Anthropic and Ollama |
+| `providers/` | `LlmProvider` abstraction; a descriptor registry drives setup, fallback and the model picker |
 | `agent/` | The turn loop, tool registry, change sets, command execution, safety checks |
 
-`src/vscode/` holds commands, webview and tree providers, and file watchers. `src/container.ts` is the service container.
+`src/vscode/` holds commands, webview and tree providers, and file watchers. `src/container.ts` is the service container. `webview-ui/` is a separate React + Vite package that builds into `out/webview/` and talks to the host over a protocol shared from `src/shared/types/webview.types.ts`.
 
 ---
 
@@ -82,20 +82,29 @@ npm run build
 
 Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
 
-Run **`Repo Intelligence: Choose Model Provider`** from the command palette. It walks you through picking a backend and configuring it:
+Open the Repo Intelligence view in the activity bar. The bar above the input shows your active **model** and **mode** — click either to change it, or **＋** to add a platform:
 
-- **Claude** — prompts for an API key, then a model. The key is stored in the OS keychain via `SecretStorage`, never in `settings.json`.
-- **Ollama** — prompts for the server URL, then lists the models you have actually pulled, ranked by whether they can drive the agent. Install [Ollama](https://ollama.com) and `ollama pull qwen2.5-coder:7b` first.
+| Provider | Needs |
+|---|---|
+| **Anthropic** (Claude) | API key |
+| **Ollama** (local) | nothing — lists the models you have pulled |
+| **OpenAI** | API key |
+| **Google Gemini** | API key |
+| **OpenRouter** | API key |
+| **Groq** | API key |
+| **Nvidia NIM** | API key |
 
-The setup flow validates against the live backend before saving, and the status bar shows which provider and model are active — turning amber if a run falls back to a different backend than the one you chose.
+Keys go into the OS keychain via `SecretStorage`, never `settings.json`. Setup validates against the live backend before saving, and models are listed from the provider itself rather than hardcoded.
 
-Then run `Repo Intelligence: Scan Repository` and open the Repo Intelligence view in the activity bar.
+The same flow is available from the command palette as **`Repo Intelligence: Choose Model Provider`**. The status bar shows the active provider and model, turning amber if a run falls back to a different backend than the one you chose.
+
+Then run `Repo Intelligence: Scan Repository` to index the workspace.
 
 > **Model choice matters more than anything else here.** The agent works by emitting structured tool calls. A small general-purpose local model cannot do that reliably, and the way it fails is by replying in prose — often by asking *you* where a file is instead of searching for it. Anything under about 7B parameters will do this. The model picker flags it, but it is worth knowing why.
 
 ### Adding a provider
 
-A new backend is one implementation file, one descriptor, and one line in [src/layer3-reasoning/providers/registry.ts](src/layer3-reasoning/providers/registry.ts). The descriptor declares what configuration the provider needs — secrets, URLs, fixed or dynamically-listed models — and that single declaration drives the setup wizard, validation, the status bar, and the fallback chain. No changes to `ProviderFactory`, no union type to extend, no `package.json` edit.
+A new backend is one implementation file, one descriptor, and one line in [src/layer3-reasoning/providers/registry.ts](src/layer3-reasoning/providers/registry.ts) — and for anything OpenAI-compatible, just a row in [`vendors.ts`](src/layer3-reasoning/providers/openai-compat/vendors.ts). The descriptor declares what configuration the provider needs — secrets, URLs, fixed or dynamically-listed models — and that single declaration drives the setup wizard, validation, the status bar, and the fallback chain. No changes to `ProviderFactory`, no union type to extend, no `package.json` edit.
 
 ---
 
@@ -121,7 +130,8 @@ The agent loop is integration-tested against a scripted `MockProvider` that repl
 
 Not automated; run before releasing.
 
-1. <kbd>F5</kbd> → set API key → `Scan Repository` completes without error
+0. `npx vsce ls` lists `out/webview/index.js` and `index.css` — packaging failures are otherwise silent
+1. <kbd>F5</kbd> → ＋ → add a provider → it validates and its models appear in the dropdown
 2. Ask the agent for a change spanning two files
 3. The step timeline streams reasoning and tool calls live
 4. The diff shows **only** the changed hunks, not whole-file rewrites
@@ -141,7 +151,7 @@ Not automated; run before releasing.
 - A run parked awaiting approval lives in memory. Its transcript is persisted, but reloading the window before deciding abandons the run rather than resuming it.
 - Switching provider while a run is parked for approval stops that run rather than resuming it — the conversation history contains provider-specific blocks that cannot be replayed elsewhere. Approved changes are still applied; you just start a new run to continue.
 - Provider settings do not deep-merge across scopes: a workspace-level entry for a provider fully shadows the global one for that provider.
-- The chat panel renders the agent timeline read-only; approving still goes through the command palette.
+- The previous inline-HTML UI is still present as a fallback behind `repo-intelligence.ui.reactPanel`. It will be deleted once the React panel has been exercised in real use.
 
 ## License
 
