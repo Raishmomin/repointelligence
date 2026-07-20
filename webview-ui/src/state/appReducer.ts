@@ -83,8 +83,17 @@ function reduceHostMessage(state: AppState, message: ExtensionToWebview): AppSta
     case 'streamChunk':
       return { ...state, streaming: state.streaming + message.chunk };
 
-    case 'contextInfo':
-      return { ...state, contextSummary: message.summary };
+    case 'contextInfo': {
+      const count = message.files.length;
+      return {
+        ...state,
+        contextSummary: `${count} file${count === 1 ? '' : 's'} in context · ${message.tokensUsed} tokens`,
+      };
+    }
+
+    case 'ollamaHealth':
+      // Surfaced through the provider picker and status bar rather than the transcript.
+      return state;
 
     case 'agentTimeline':
       return {

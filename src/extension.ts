@@ -58,7 +58,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // 6. Initialize chat webview panel
   chatWebviewProvider = container.chatWebviewProvider;
-  vscode.window.registerWebviewViewProvider('repo-intelligence.chatView', chatWebviewProvider);
+  vscode.window.registerWebviewViewProvider('repo-intelligence.chatView', chatWebviewProvider, {
+    // Without this the webview is destroyed whenever the view is hidden — collapsing the
+    // sidebar or switching to another view throws away the whole conversation, and the
+    // panel comes back empty. It belongs here: `retainContextWhenHidden` is a
+    // registration option, not a property on the WebviewView.
+    webviewOptions: { retainContextWhenHidden: true },
+  });
   // Unsubscribes the agent stream bridge from the EventBus on shutdown.
   context.subscriptions.push({ dispose: () => chatWebviewProvider.dispose() });
 

@@ -10,10 +10,23 @@ import { ProposalContentProvider } from './ProposalContentProvider';
 import { AgentStreamBridge } from './AgentStreamBridge';
 import { buildReactHtml, isReactUiEnabled } from './ReactWebviewHost';
 import { ProviderRpcHandler } from './ProviderRpcHandler';
-import type { RpcMethod, TaskModeDto } from '../../shared/types/webview.types';
+import type {
+  AgentStreamStep,
+  ExtensionToWebview,
+  RpcMethod,
+  SessionDto,
+  TaskModeDto,
+} from '../../shared/types/webview.types';
 import { EventBus } from '../../shared/EventBus';
 import { ChatMessage } from '../../shared/types/context.types';
 import { AgentRun, ChangeSet, CommandRequest } from '../../shared/types/agent.types';
+
+/** Maps the database's snake_case rows onto the protocol's shape. */
+function toSessionDtos(
+  rows: Array<{ id: string; title: string; created_at: number }>,
+): SessionDto[] {
+  return rows.map(row => ({ id: row.id, title: row.title, createdAt: row.created_at }));
+}
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
@@ -22,7 +35,18 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private activeSessionId: string | null = null;
   private activeProjectId: string | null = null;
 
-  private readonly agentStream = new AgentStreamBridge(message => this.postToWebview(message));
+  private readonly agentStream = new AgentStreamBridge(message => {
+    this.rememberSteps(message.runId, message.steps);
+    this.postToWebview(message);
+  });
+  /**
+   * Steps already delivered, per run.
+   *
+   * `retainContextWhenHidden` covers hiding the view, but a window reload or an extension
+   * restart still remounts the webview with empty state. Without a replay the timeline
+   * comes back blank even though the run happened.
+   */
+  private readonly deliveredSteps = new Map<string, AgentStreamStep[]>();
   private readonly rpcHandler = new ProviderRpcHandler(this.container.providerFactory);
   private activeMode: TaskModeDto = 'implement';
   /** Set when a run was served by a fallback, so the composer bar can flag it. */
@@ -51,6 +75,26 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     // Approvals appear mid-run, not in response to anything the panel asked for.
     events.on('agent:approvalRequired', () => this.pushApprovals());
     events.on('agent:runFinished', () => this.pushApprovals());
+  }
+
+  private rememberSteps(runId: string, steps: AgentStreamStep[]): void {
+    const existing = this.deliveredSteps.get(runId) ?? [];
+    this.deliveredSteps.set(runId, [...existing, ...steps]);
+
+    // Only the most recent runs are worth replaying; an unbounded map would grow for the
+    // lifetime of the window.
+    while (this.deliveredSteps.size > 3) {
+      const oldest = this.deliveredSteps.keys().next().value;
+      if (oldest === undefined) break;
+      this.deliveredSteps.delete(oldest);
+    }
+  }
+
+  /** Re-sends recent runs after a remount, in their original order. */
+  private replayTimeline(): void {
+    for (const [runId, steps] of this.deliveredSteps) {
+      this.postToWebview({ type: 'agentStream', runId, steps });
+    }
   }
 
   public dispose(): void {
@@ -183,13 +227,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         : [this.container.extensionContext.extensionUri],
     };
 
-    // Without this, collapsing the sidebar mid-run destroys every step already delivered
-    // and the timeline comes back empty.
-    webviewView.webview.options = { ...webviewView.webview.options };
-    if ('retainContextWhenHidden' in webviewView) {
-      (webviewView as { retainContextWhenHidden?: boolean }).retainContextWhenHidden = true;
-    }
-
     webviewView.webview.html = useReact
       ? buildReactHtml(webviewView.webview, this.container.extensionContext.extensionUri)
       : this.getHtmlContent(webviewView.webview);
@@ -270,6 +307,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     // a scanned project.
     void this.pushModelState();
     this.pushApprovals();
+    this.replayTimeline();
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const currentWorkspacePath = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : null;
@@ -334,7 +372,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     // Send sessions list
-    this.postToWebview({ type: 'sessions', sessions, activeSessionId: this.activeSessionId });
+    this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
 
     // Send Ollama health status
     const health = await this.container.ollamaClient.checkHealth();
@@ -359,7 +397,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
       [this.activeProjectId]
     );
-    this.postToWebview({ type: 'sessions', sessions, activeSessionId: this.activeSessionId });
+    this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
     this.postToWebview({ type: 'messages', messages: [] });
   }
 
@@ -381,22 +419,40 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
         [this.activeProjectId]
       );
-      this.postToWebview({ type: 'sessions', sessions, activeSessionId: this.activeSessionId });
+      this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
     }
+  }
+
+  /**
+   * Appends one message to the active session and pushes the updated conversation.
+   *
+   * Persisting rather than only posting is what makes the transcript survive a reload:
+   * the webview holds no durable state of its own.
+   */
+  private async recordMessage(role: 'user' | 'assistant', content: string): Promise<void> {
+    if (!this.activeSessionId) return;
+
+    this.container.database.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+      [uuid(), this.activeSessionId, role, content, Date.now()],
+    );
+    this.container.database.save();
+    await this.loadActiveSessionMessages();
   }
 
   private async loadActiveSessionMessages(): Promise<void> {
     if (!this.activeSessionId) return;
 
-    const dbMessages = this.container.database.query<{ role: string; content: string; created_at: number }>(
-      'SELECT role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC',
+    const dbMessages = this.container.database.query<{ id: string; role: string; content: string; created_at: number }>(
+      'SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC',
       [this.activeSessionId]
     );
 
     const messages = dbMessages.map(m => ({
+      id: m.id,
       role: m.role as 'user' | 'assistant',
       content: m.content,
-      timestamp: m.created_at,
+      createdAt: m.created_at,
     }));
 
     this.postToWebview({ type: 'messages', messages });
@@ -433,7 +489,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
         [this.activeProjectId]
       );
-      this.postToWebview({ type: 'sessions', sessions, activeSessionId: this.activeSessionId });
+      this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
     }
 
     this.container.database.save();
@@ -442,8 +498,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     await this.loadActiveSessionMessages();
 
     // 2. Fetch history context
-    const dbMessages = this.container.database.query<{ role: string; content: string; created_at: number }>(
-      'SELECT role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC',
+    const dbMessages = this.container.database.query<{ id: string; role: string; content: string; created_at: number }>(
+      'SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC',
       [this.activeSessionId]
     );
     const history: ChatMessage[] = dbMessages.map(m => ({
@@ -521,8 +577,14 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       : await vscode.window.showQuickPick(folders.map(folder => ({ label: folder.name, folder })), { placeHolder: 'Choose the workspace folder for this agent task' }).then(item => item?.folder);
     if (!workspace) return;
 
+    // Record the prompt before the run starts. The agent path previously wrote nothing to
+    // chat_messages, so your own message never appeared and nothing survived a reload.
+    await this.recordMessage('user', text);
+
     this.postToWebview({ type: 'status', status: 'thinking', message: mode === 'implement' ? 'Inspecting your project and preparing a reviewed change set…' : 'Inspecting your project…' });
     const run = await this.container.agentService.run(text, mode, workspace, this.activeSessionId ?? undefined);
+
+    if (run.response) await this.recordMessage('assistant', run.response);
     this.showAgentRun(run, this.container.agentService.getPendingChangeSets(), this.container.agentService.getPendingCommands());
     this.postToWebview({ type: 'status', status: 'idle' });
     if (run.status === 'awaiting_approval') {
@@ -530,8 +592,13 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private postToWebview(data: any): void {
-    this._view?.webview.postMessage(data);
+  /**
+   * Typed on purpose. This was `any`, which is how a message declaring `timestamp` reached
+   * a webview expecting `createdAt` and failed only at runtime — the compiler now rejects
+   * any shape not in the shared protocol.
+   */
+  private postToWebview(message: ExtensionToWebview): void {
+    this._view?.webview.postMessage(message);
   }
 
   private getHtmlContent(webview: vscode.Webview): string {

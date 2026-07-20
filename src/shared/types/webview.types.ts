@@ -100,8 +100,9 @@ export type ExtensionToWebview =
   | { type: 'sessions'; sessions: SessionDto[]; activeSessionId: string | null }
   | { type: 'messages'; messages: ChatMessageDto[] }
   | { type: 'streamChunk'; chunk: string }
-  | { type: 'contextInfo'; summary: string }
+  | { type: 'contextInfo'; files: string[]; tokensUsed: number }
   | { type: 'agentTimeline'; content: string }
+  | { type: 'ollamaHealth'; health: { available: boolean; url: string; error: string | null } }
   | { type: 'agentStream'; runId: string; steps: AgentStreamStep[] }
   | { type: 'modelState'; state: ModelStateDto; models: ModelOptionDto[] }
   | { type: 'providers'; providers: ProviderSummaryDto[] }
