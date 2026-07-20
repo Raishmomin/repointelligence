@@ -3,15 +3,16 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 /**
- * Files still allowed to write to disk directly. `ChangeSetService` is the intended
- * permanent home for every mutation; `ChatWebviewProvider` is listed only because it
- * still carries the legacy SEARCH/REPLACE edit path, which Phase 4 deletes. Removing
- * that entry is the acceptance test for Phase 4.
+ * The only files permitted to write to disk directly.
+ *
+ * `ChangeSetService` is the single path through which workspace files may be mutated, so
+ * that approval, hash-staleness checks, and revert history cannot be bypassed.
+ * `DatabaseManager` is exempt because it persists the extension's own SQLite store, never
+ * anything in the user's workspace.
  */
 const FILE_WRITE_ALLOWLIST = [
   'src/layer3-reasoning/agent/ChangeSetService.ts',
-  'src/layer2-context/database/DatabaseManager.ts', // persists the extension's own SQLite store, never workspace files
-  'src/vscode/providers/ChatWebviewProvider.ts', // TODO(phase-4): delete the legacy edit path, then drop this line
+  'src/layer2-context/database/DatabaseManager.ts',
 ];
 
 export default tseslint.config(

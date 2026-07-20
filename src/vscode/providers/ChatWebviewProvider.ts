@@ -4,10 +4,10 @@
 
 import * as vscode from 'vscode';
 import { v4 as uuid } from 'uuid';
-import * as fs from 'fs';
 import * as path from 'path';
 import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
+import { ProposalContentProvider } from './ProposalContentProvider';
 import { EventBus } from '../../shared/EventBus';
 import { ChatMessage } from '../../shared/types/context.types';
 import { AgentRun, ChangeSet, CommandRequest } from '../../shared/types/agent.types';
@@ -58,10 +58,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const workspace = vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === stored.workspace_uri);
     if (!workspace) throw new Error('Selected workspace is no longer open.');
     const original = vscode.Uri.joinPath(workspace.uri, relativePath);
-    const temp = vscode.Uri.joinPath(this.container.extensionContext.globalStorageUri, 'agent-diffs', `${changeSetId}-${path.basename(relativePath)}`);
-    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this.container.extensionContext.globalStorageUri, 'agent-diffs'));
-    await vscode.workspace.fs.writeFile(temp, Buffer.from(operation.kind === 'delete' ? '' : operation.content ?? ''));
-    await vscode.commands.executeCommand('vscode.diff', original, temp, `${relativePath}: Current ↔ Agent Proposal`);
+    // Served from memory by ProposalContentProvider rather than written to a temp file:
+    // reviewing a change should not leave anything on disk.
+    const proposed = ProposalContentProvider.uriFor(changeSetId, relativePath);
+    const label = operation.kind === 'create' ? 'New file' : 'Current \u2194 Agent Proposal';
+    await vscode.commands.executeCommand('vscode.diff', original, proposed, `${relativePath}: ${label}`);
   }
 
   resolveWebviewView(
@@ -102,12 +103,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             break;
           case 'deleteSession':
             await this.handleDeleteSession(message.sessionId);
-            break;
-          case 'showDiff':
-            await this.handleShowDiff(message.filepath, message.search, message.replace, message.code);
-            break;
-          case 'applyChanges':
-            await this.handleApplyChanges(message.filepath, message.search, message.replace, message.code);
             break;
         }
       } catch (error) {
@@ -664,25 +659,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     let agentMode;
     let currentStreamBubble = null;
 
-    window.codeBlocks = [];
-    window.compareCodeBlock = function(index) {
-      const block = window.codeBlocks[index];
-      if (!block) return;
-      if (block.search !== undefined) {
-        vscode.postMessage({ type: 'showDiff', filepath: block.filepath, search: block.search, replace: block.replace });
-      } else {
-        vscode.postMessage({ type: 'showDiff', filepath: block.filepath, code: block.code });
-      }
-    };
-    window.applyCodeBlock = function(index) {
-      const block = window.codeBlocks[index];
-      if (!block) return;
-      if (block.search !== undefined) {
-        vscode.postMessage({ type: 'applyChanges', filepath: block.filepath, search: block.search, replace: block.replace });
-      } else {
-        vscode.postMessage({ type: 'applyChanges', filepath: block.filepath, code: block.code });
-      }
-    };
+    // Chat suggestions are read-only. Applying a change goes through the agent, which
+    // gates every write behind an explicit approval with a staleness check -- the chat
+    // pane must not offer a second, unchecked way to write to disk.
 
     try {
       console.log('[RepoIntel] 1/7 Script started');
@@ -824,17 +803,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       // Replace each diff block with a placeholder
       for (let i = 0; i < diffBlocks.length; i++) {
         const block = diffBlocks[i];
-        const idx = window.codeBlocks.length;
-        window.codeBlocks.push({ filepath: block.filepath, search: block.search, replace: block.replace });
-
         // Build inline diff HTML
         let diffHtml = '<div class="diff-container">' +
           '<div class="diff-header">' +
             '<span class="diff-filepath">' + block.filepath + '</span>' +
-            '<div class="diff-actions">' +
-              '<button onclick="compareCodeBlock(' + idx + ')" class="diff-btn">Compare</button>' +
-              '<button onclick="applyCodeBlock(' + idx + ')" class="diff-btn apply">Apply</button>' +
-            '</div>' +
           '</div>' +
           '<div class="diff-body">';
 
@@ -875,15 +847,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           filepath = parts[1];
         }
         if (filepath) {
-          const index = window.codeBlocks.length;
-          window.codeBlocks.push({ filepath, code });
           return '<div class="code-block-container">' +
             '<div class="code-block-header">' +
               '<span class="code-block-filepath">' + filepath + '</span>' +
-              '<div class="code-block-actions">' +
-                '<button onclick="compareCodeBlock(' + index + ')" class="diff-btn">Compare</button>' +
-                '<button onclick="applyCodeBlock(' + index + ')" class="diff-btn apply">Apply</button>' +
-              '</div>' +
             '</div>' +
             '<pre><code class="' + lang + '">' + code + '</code></pre>' +
           '</div>';
@@ -996,113 +962,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 
-  private async handleShowDiff(
-    relativePath: string, searchContent?: string, replaceContent?: string, fullCode?: string
-  ): Promise<void> {
-    const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!rootPath) {
-      vscode.window.showErrorMessage('No active workspace folder found.');
-      return;
-    }
-    const absPath = path.resolve(rootPath, relativePath);
-
-    if (!fs.existsSync(absPath)) {
-      vscode.window.showErrorMessage(`File not found: ${relativePath}`);
-      return;
-    }
-
-    try {
-      const originalContent = fs.readFileSync(absPath, 'utf-8');
-      let modifiedContent: string;
-
-      if (searchContent && replaceContent !== undefined) {
-        // Surgical SEARCH/REPLACE
-        const idx = originalContent.indexOf(searchContent);
-        if (idx === -1) {
-          vscode.window.showWarningMessage(`Could not find the target code block in ${relativePath}`);
-          return;
-        }
-        modifiedContent = originalContent.substring(0, idx) + replaceContent + originalContent.substring(idx + searchContent.length);
-      } else if (fullCode) {
-        // Full file replacement (new file or legacy)
-        modifiedContent = fullCode;
-      } else {
-        return;
-      }
-
-      // Write to temp file in extension globalStorage
-      const storagePath = this.container.extensionContext.globalStorageUri.fsPath;
-      const tempDir = path.join(storagePath, 'diffs');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-      const tempFile = path.join(tempDir, `proposed-${path.basename(relativePath)}`);
-      fs.writeFileSync(tempFile, modifiedContent, 'utf-8');
-
-      await vscode.commands.executeCommand(
-        'vscode.diff',
-        vscode.Uri.file(absPath),
-        vscode.Uri.file(tempFile),
-        `${relativePath}: Current \u2194 Proposed`
-      );
-    } catch (err) {
-      this.logger.error('handleShowDiff failed', err);
-      vscode.window.showErrorMessage(`Failed to show diff: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  private async handleApplyChanges(
-    relativePath: string, searchContent?: string, replaceContent?: string, fullCode?: string
-  ): Promise<void> {
-    const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!rootPath) {
-      vscode.window.showErrorMessage('No active workspace folder found.');
-      return;
-    }
-    const fileUri = vscode.Uri.file(path.resolve(rootPath, relativePath));
-
-    try {
-      if (searchContent && replaceContent !== undefined) {
-        // Surgical SEARCH/REPLACE with WorkspaceEdit (supports undo)
-        const doc = await vscode.workspace.openTextDocument(fileUri);
-        const currentText = doc.getText();
-        const searchIdx = currentText.indexOf(searchContent);
-
-        if (searchIdx === -1) {
-          vscode.window.showWarningMessage(`Could not find the target code block in ${relativePath}. File may have changed.`);
-          return;
-        }
-
-        const startPos = doc.positionAt(searchIdx);
-        const endPos = doc.positionAt(searchIdx + searchContent.length);
-        const range = new vscode.Range(startPos, endPos);
-
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(fileUri, range, replaceContent);
-        await vscode.workspace.applyEdit(edit);
-
-        // Show the file scrolled to the change
-        const editor = await vscode.window.showTextDocument(doc);
-        editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-        vscode.window.showInformationMessage(`Applied changes to ${relativePath}`);
-
-      } else if (fullCode) {
-        // Full file overwrite (for new files)
-        const absPath = path.resolve(rootPath, relativePath);
-        const dir = path.dirname(absPath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(absPath, fullCode, 'utf-8');
-        const doc = await vscode.workspace.openTextDocument(fileUri);
-        await vscode.window.showTextDocument(doc);
-        vscode.window.showInformationMessage(`Created ${relativePath}`);
-      }
-    } catch (err) {
-      this.logger.error('handleApplyChanges failed', err);
-      vscode.window.showErrorMessage(`Failed to apply changes: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
 
   private getNonce(): string {
     let text = '';

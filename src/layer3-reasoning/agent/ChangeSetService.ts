@@ -7,6 +7,7 @@ import { ChangeSet, FileOperation } from '../../shared/types/agent.types';
 import { contentHash } from './AgentSafety';
 
 export class ChangeSetService {
+  private reindexTimer: ReturnType<typeof setTimeout> | undefined;
   constructor(private readonly container: ServiceContainer) {}
   async apply(change: ChangeSet): Promise<void> {
     const workspace = vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === change.workspaceUri); if (!workspace) throw new Error('Selected workspace is no longer open.');
@@ -23,7 +24,26 @@ export class ChangeSetService {
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code rejected the change set.');
     change.status = 'applied'; const now = Date.now();
     this.container.database.transaction(() => { this.container.database.run('UPDATE change_sets SET status = ?, applied_at = ? WHERE id = ?', ['applied', now, change.id]); this.approval('change_set', change.id, true); }); this.container.database.save();
-    vscode.commands.executeCommand('repo-intelligence.scanRepository');
+    this.scheduleReindex();
+  }
+
+  /**
+   * Coalesces re-index requests.
+   *
+   * A scan is a full repository walk, and an agent run can approve a dozen edits in quick
+   * succession — running one scan per approval made the editor unusable mid-run. Deferring
+   * briefly collapses a burst of approvals into a single scan.
+   *
+   * A genuinely incremental re-index of only the touched files would be better still, but
+   * nothing currently consumes the watcher's file events for indexing, so emitting those
+   * instead would leave the knowledge base silently stale.
+   */
+  private scheduleReindex(): void {
+    if (this.reindexTimer) clearTimeout(this.reindexTimer);
+    this.reindexTimer = setTimeout(() => {
+      this.reindexTimer = undefined;
+      vscode.commands.executeCommand('repo-intelligence.scanRepository');
+    }, 2000);
   }
   reject(change: ChangeSet): void { change.status = 'rejected'; this.container.database.transaction(() => { this.container.database.run('UPDATE change_sets SET status = ? WHERE id = ?', ['rejected', change.id]); this.approval('change_set', change.id, false); }); this.container.database.save(); }
   async revert(id: string): Promise<void> {

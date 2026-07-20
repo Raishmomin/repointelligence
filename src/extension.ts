@@ -9,6 +9,7 @@ import { StatusBarManager } from './vscode/providers/StatusBarManager';
 import { FileWatcherManager } from './vscode/watchers/FileWatcherManager';
 import { KnowledgeTreeProvider } from './vscode/providers/KnowledgeTreeProvider';
 import { ChatWebviewProvider } from './vscode/providers/ChatWebviewProvider';
+import { ProposalContentProvider, PROPOSAL_SCHEME } from './vscode/providers/ProposalContentProvider';
 import { Logger } from './shared/Logger';
 import { EXTENSION_NAME } from './shared/constants';
 
@@ -55,6 +56,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // 6. Initialize chat webview panel
   chatWebviewProvider = container.chatWebviewProvider;
   vscode.window.registerWebviewViewProvider('repo-intelligence.chatView', chatWebviewProvider);
+
+  // 7. Serve proposed file contents to the diff viewer from memory, so reviewing an
+  //    agent change never writes a temp file to disk.
+  const proposalProvider = new ProposalContentProvider(container.database);
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(PROPOSAL_SCHEME, proposalProvider),
+    proposalProvider,
+  );
 
   // 5. Auto-scan on open (if enabled)
   const config = vscode.workspace.getConfiguration('repo-intelligence');
