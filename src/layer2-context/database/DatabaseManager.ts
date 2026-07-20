@@ -11,6 +11,7 @@ import { DatabaseError } from '../../shared/errors';
 import { DB_FILENAME, DB_VERSION } from '../../shared/constants';
 import { runMigrations } from './migrations/001_initial';
 import { runAgentMigration } from './migrations/002_agent';
+import { runTranscriptMigration } from './migrations/003_agent_transcript';
 
 /**
  * Manages the SQLite database lifecycle using sql.js (WASM).
@@ -233,6 +234,7 @@ export class DatabaseManager {
       this.logger.info('Running database migrations', { from: version, to: DB_VERSION });
       runMigrations(db, version);
       runAgentMigration(db, version);
+      runTranscriptMigration(db, version);
       db.run('INSERT INTO _migrations (version, applied_at) VALUES (?, ?)', [
         DB_VERSION,
         Date.now(),

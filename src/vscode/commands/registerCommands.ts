@@ -43,15 +43,21 @@ export function registerCommands(context: vscode.ExtensionContext): void {
     const first = item.change.operations[0]; if (first) await container.chatWebviewProvider.showAgentDiff(item.change.id, first.path);
   }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.APPROVE_CHANGE_SET, async () => { const id = await pickPendingChangeSet(container, 'Approve'); if (id) { await container.agentService.approveChangeSet(id); vscode.window.showInformationMessage('Agent change set applied.'); } }));
-  context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REJECT_CHANGE_SET, async () => { const id = await pickPendingChangeSet(container, 'Reject'); if (id) { container.agentService.rejectChangeSet(id); vscode.window.showInformationMessage('Agent change set rejected.'); } }));
+  context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REJECT_CHANGE_SET, async () => { const id = await pickPendingChangeSet(container, 'Reject'); if (id) { await container.agentService.rejectChangeSet(id); vscode.window.showInformationMessage('Agent change set rejected.'); } }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.APPROVE_COMMAND, async () => { const commands = container.agentService.getPendingCommands(); const choice = await vscode.window.showQuickPick(commands.map(command => ({ label: `${command.command} ${command.args.join(' ')}`, description: command.reason, command })), { placeHolder: 'Every command requires approval' }); if (!choice) return; try { const output = await container.agentService.approveCommand(choice.command.id); container.chatWebviewProvider.showAgentLog(output); } catch (error) { container.chatWebviewProvider.showAgentLog(error instanceof Error ? error.message : String(error)); } }));
-  context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REJECT_COMMAND, async () => { const commands = container.agentService.getPendingCommands(); const choice = await vscode.window.showQuickPick(commands.map(command => ({ label: `${command.command} ${command.args.join(' ')}`, command }))); if (choice) container.agentService.rejectCommand(choice.command.id); }));
+  context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REJECT_COMMAND, async () => { const commands = container.agentService.getPendingCommands(); const choice = await vscode.window.showQuickPick(commands.map(command => ({ label: `${command.command} ${command.args.join(' ')}`, command }))); if (choice) await container.agentService.rejectCommand(choice.command.id); }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REVERT_CHANGE_SET, async () => { const records = container.database.query<{ id: string; summary: string }>('SELECT id, summary FROM change_sets WHERE status = ? ORDER BY applied_at DESC', ['applied']); const choice = await vscode.window.showQuickPick(records.map(record => ({ label: record.summary, record }))); if (choice) await container.changeSetService.revert(choice.record.id); }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.SHOW_AGENT_HISTORY, () => {
     const runs = container.database.query<{ mode: string; prompt: string; status: string; created_at: number }>('SELECT mode, prompt, status, created_at FROM agent_runs ORDER BY created_at DESC LIMIT 20');
     container.chatWebviewProvider.showAgentLog(runs.map(run => `[${new Date(run.created_at).toLocaleString()}] ${run.mode} · ${run.status}\n${run.prompt}`).join('\n\n') || 'No agent runs yet.');
   }));
   context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.REVOKE_SESSION_TRUST, () => { container.agentService.revokeSessionTrust(); vscode.window.showInformationMessage('Agent session trust revoked.'); }));
+  context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.CANCEL_AGENT, () => {
+    const running = container.agentService.getRunningRunIds();
+    if (!running.length) { vscode.window.showInformationMessage('No agent run is in progress.'); return; }
+    running.forEach(id => container.agentService.cancel(id));
+    vscode.window.showInformationMessage('Stopping the agent run.');
+  }));
 
   // Open Chat
   context.subscriptions.push(

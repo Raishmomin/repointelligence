@@ -111,6 +111,12 @@
         "category": "Repo Intelligence"
       },
       {
+        "command": "repo-intelligence.cancelAgent",
+        "title": "Stop Agent Run",
+        "category": "Repo Intelligence",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "repo-intelligence.setApiKey",
         "title": "Set Anthropic API Key",
         "category": "Repo Intelligence",
@@ -238,12 +244,18 @@
           "default": true,
           "description": "Automatically scan the repository when the workspace opens"
         },
-        "repo-intelligence.agent.maxIterations": {
+        "repo-intelligence.agent.maxTurns": {
           "type": "number",
-          "default": 2,
+          "default": 30,
           "minimum": 1,
-          "maximum": 10,
-          "description": "Maximum model/tool turns per agent request"
+          "maximum": 100,
+          "description": "Maximum model turns in a single agent run before it stops and reports back."
+        },
+        "repo-intelligence.agent.maxOutputTokens": {
+          "type": "number",
+          "default": 16000,
+          "minimum": 1024,
+          "description": "Maximum tokens the model may generate per turn. Capped to the model's own limit."
         },
         "repo-intelligence.agent.commandTimeoutMs": {
           "type": "number",

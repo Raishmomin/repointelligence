@@ -41,6 +41,35 @@ export interface EventMap {
   'chat:messageReceived': { sessionId: string; role: string; content: string };
   'chat:streamChunk': { sessionId: string; chunk: string };
   'chat:streamEnd': { sessionId: string };
+
+  // Agent run lifecycle. The webview subscribes to these to render a live step timeline.
+  // Delta events fire per token, so consumers must batch before posting to a webview —
+  // one postMessage per token will pin the extension host.
+  'agent:runStarted': { runId: string; prompt: string; mode: string };
+  'agent:turnStarted': { runId: string; turn: number; maxTurns: number };
+  'agent:textDelta': { runId: string; text: string };
+  'agent:thinkingDelta': { runId: string; text: string };
+  'agent:toolCallStarted': { runId: string; toolCallId: string; name: string };
+  'agent:toolCallInput': { runId: string; toolCallId: string; partialJson: string };
+  'agent:toolCallResult': {
+    runId: string;
+    toolCallId: string;
+    name: string;
+    ok: boolean;
+    preview: string;
+  };
+  'agent:approvalRequired': {
+    runId: string;
+    changeSetIds: string[];
+    commandIds: string[];
+  };
+  'agent:runFinished': {
+    runId: string;
+    status: string;
+    turns: number;
+    usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  };
+  'agent:error': { runId: string; message: string };
 }
 
 type EventHandler<T> = (payload: T) => void;

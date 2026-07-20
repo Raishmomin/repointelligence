@@ -1,77 +1,611 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { ServiceContainer } from '../../container';
-import { AgentRun, AgentTask, ChangeSet, CommandRequest, FileOperation, TaskMode } from '../../shared/types/agent.types';
-import { parseAgentEnvelope } from './AgentProtocol';
-import { WorkspaceTools } from './WorkspaceTools';
-import { isSafeCommand } from './AgentSafety';
+import { EventBus } from '../../shared/EventBus';
+import { Logger } from '../../shared/Logger';
+import {
+  AgentRun,
+  AgentRunStatus,
+  AgentTask,
+  ChangeSet,
+  CommandRequest,
+  TaskMode,
+} from '../../shared/types/agent.types';
+import {
+  LlmContentBlock,
+  LlmMessage,
+  LlmProvider,
+  LlmToolResultBlock,
+  LlmUsage,
+} from '../providers/types';
+import { FileStateTracker } from './FileStateTracker';
+import { buildSystemPrompt } from './systemPrompt';
+import { ToolRegistry } from './ToolRegistry';
+import { ToolContext } from './tools/types';
+import { TranscriptManager } from './TranscriptManager';
 
+/**
+ * Which tool calls from a parked turn are answered, and which are still waiting on the
+ * user. Persisted, because approval can outlive the extension host.
+ *
+ * `toolUseIds` preserves the original order: every `tool_use` block in the parked
+ * assistant turn must be answered, in one user message, in that order.
+ */
+interface PendingTurnState {
+  toolUseIds: string[];
+  resolved: Record<string, { content: string; isError?: boolean }>;
+  awaiting: Record<string, { kind: 'file' | 'command'; subjectId: string; name: string }>;
+}
+
+interface RunState {
+  run: AgentRun;
+  transcript: TranscriptManager;
+  fileState: FileStateTracker;
+  pending?: PendingTurnState;
+  turn: number;
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  cancellation: vscode.CancellationTokenSource;
+}
+
+/**
+ * Runs the agent loop.
+ *
+ * Reads execute immediately. The first write or command proposal parks the run: its state
+ * is persisted, the user is asked, and the loop resumes from exactly where it stopped once
+ * every proposal from that turn has a decision.
+ */
 export class AgentService {
-  private pending = new Map<string, ChangeSet>();
-  private pendingCommands = new Map<string, CommandRequest>();
-  constructor(private readonly container: ServiceContainer) {}
-  revokeSessionTrust(workspaceUri?: string): void {
-    if (workspaceUri) this.container.database.run('UPDATE agent_session_trust SET trusted = 0, updated_at = ? WHERE workspace_uri = ?', [Date.now(), workspaceUri]);
-    else this.container.database.run('UPDATE agent_session_trust SET trusted = 0, updated_at = ?', [Date.now()]);
+  private readonly registry = new ToolRegistry();
+  private readonly active = new Map<string, RunState>();
+  private readonly pendingChangeSets = new Map<string, ChangeSet>();
+  private readonly pendingCommands = new Map<string, CommandRequest>();
+
+  constructor(
+    private readonly container: ServiceContainer,
+    private readonly events: EventBus = EventBus.getInstance(),
+    private readonly logger: Logger = Logger.getInstance(),
+  ) {}
+
+  // ── Entry point ────────────────────────────────────────────
+
+  async run(
+    prompt: string,
+    mode: TaskMode,
+    workspace: vscode.WorkspaceFolder,
+    sessionId?: string,
+  ): Promise<AgentRun> {
+    const resolved = await this.container.providerFactory.resolveChatProvider();
+    if (!resolved) {
+      throw new Error(
+        'No language model is available. Set an Anthropic API key, or start Ollama and ' +
+          'set repo-intelligence.provider to "ollama".',
+      );
+    }
+    if (resolved.notice) vscode.window.showWarningMessage(resolved.notice);
+
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const task: AgentTask = { id, prompt, mode, workspaceUri: workspace.uri.toString(), sessionId };
+    const run: AgentRun = { id, task, status: 'running', createdAt: now, updatedAt: now };
+
+    this.container.database.run(
+      'INSERT INTO agent_runs (id, workspace_uri, session_id, mode, prompt, status, created_at, updated_at, turn_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, task.workspaceUri, sessionId ?? null, mode, prompt, run.status, now, now, 0],
+    );
+
+    const transcript = new TranscriptManager(resolved.provider.contextWindow);
+    transcript.push({ role: 'user', content: prompt });
+
+    const state: RunState = {
+      run,
+      transcript,
+      fileState: new FileStateTracker(),
+      turn: 0,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+      cancellation: new vscode.CancellationTokenSource(),
+    };
+    this.active.set(id, state);
+
+    this.events.emit('agent:runStarted', { runId: id, prompt, mode });
+    return this.loop(state, resolved.provider, workspace, mode);
+  }
+
+  cancel(runId: string): void {
+    this.active.get(runId)?.cancellation.cancel();
+  }
+
+  /** Runs currently in flight or parked awaiting approval. */
+  getRunningRunIds(): string[] {
+    return [...this.active.keys()];
+  }
+
+  // ── The loop ───────────────────────────────────────────────
+
+  private async loop(
+    state: RunState,
+    provider: LlmProvider,
+    workspace: vscode.WorkspaceFolder,
+    mode: TaskMode,
+  ): Promise<AgentRun> {
+    const config = vscode.workspace.getConfiguration('repo-intelligence');
+    const maxTurns = config.get<number>('agent.maxTurns', 30);
+    const ignorePatterns = config.get<string[]>('agent.ignorePatterns', []);
+    const system = buildSystemPrompt(mode, { name: workspace.name });
+    const token = state.cancellation.token;
+
+    // Detects a model looping on the same call — usually a tool erroring identically each
+    // time, which no number of further turns will fix.
+    let lastSignature = '';
+    let repeats = 0;
+
+    try {
+      while (state.turn < maxTurns) {
+        if (token.isCancellationRequested) return this.finish(state, 'cancelled', 'Cancelled.');
+
+        state.turn++;
+        this.events.emit('agent:turnStarted', {
+          runId: state.run.id,
+          turn: state.turn,
+          maxTurns,
+        });
+
+        const result = await provider.streamTurn({
+          system,
+          messages: state.transcript.all(),
+          tools: this.registry.schemas(),
+          maxTokens: config.get<number>('agent.maxOutputTokens', 16_000),
+          token,
+          onEvent: (event) => this.forward(state.run.id, event),
+        });
+
+        state.usage.inputTokens += result.usage.inputTokens;
+        state.usage.outputTokens += result.usage.outputTokens;
+        state.usage.cacheReadTokens += result.usage.cacheReadTokens ?? 0;
+
+        // Replayed verbatim: thinking blocks must go back byte-identical, and server-side
+        // compaction state rides along in the provider's own representation.
+        state.transcript.push(
+          (result.raw as LlmMessage | undefined) ?? { role: 'assistant', content: result.content },
+        );
+        this.persistTranscript(state);
+
+        if (result.stopReason === 'cancelled') return this.finish(state, 'cancelled', 'Cancelled.');
+        if (result.stopReason === 'refusal') {
+          return this.finish(state, 'failed', 'The model declined this request.');
+        }
+
+        const toolUses = result.content.filter(
+          (block): block is Extract<LlmContentBlock, { type: 'tool_use' }> => block.type === 'tool_use',
+        );
+
+        if (!toolUses.length) {
+          return this.finish(state, 'completed', textOf(result.content));
+        }
+
+        const signature = toolUses.map((call) => `${call.name}:${JSON.stringify(call.input)}`).join('|');
+        repeats = signature === lastSignature ? repeats + 1 : 0;
+        lastSignature = signature;
+        if (repeats >= 2) {
+          state.transcript.push({
+            role: 'user',
+            content:
+              '[You have made the same tool call three times in a row and are not making ' +
+              'progress. Stop and explain what you were trying to do and what is blocking you.]',
+          });
+          continue;
+        }
+
+        const context: ToolContext = {
+          workspace,
+          fileState: state.fileState,
+          database: this.container.database,
+          searchEngine: this.container.hybridSearchEngine,
+          token,
+          turn: state.turn,
+          ignorePatterns,
+        };
+
+        const pending = await this.executeTurn(state, toolUses, context, mode);
+
+        if (Object.keys(pending.awaiting).length > 0) {
+          state.pending = pending;
+          this.persistPending(state);
+          this.events.emit('agent:approvalRequired', {
+            runId: state.run.id,
+            changeSetIds: subjectIds(pending, 'file'),
+            commandIds: subjectIds(pending, 'command'),
+          });
+          return this.park(state, textOf(result.content));
+        }
+
+        state.transcript.push(toolResultMessage(pending));
+        if (state.transcript.shouldCompact()) {
+          const removed = state.transcript.compact();
+          if (removed) this.logger.info(`Compacted agent transcript: dropped ${removed} messages.`);
+        }
+      }
+
+      return this.finish(
+        state,
+        'completed',
+        `Stopped after ${maxTurns} turns without finishing. Increase ` +
+          '"repo-intelligence.agent.maxTurns" or narrow the task.',
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.events.emit('agent:error', { runId: state.run.id, message });
+      return this.finish(state, 'failed', message);
+    }
+  }
+
+  /**
+   * Runs every tool call from one assistant turn. Auto-approved tools execute immediately;
+   * writes and commands become proposals recorded in `awaiting`.
+   *
+   * Auto tools run sequentially rather than concurrently: several edits proposed in one
+   * turn can touch the same file, and interleaved reads would race the staleness check.
+   */
+  private async executeTurn(
+    state: RunState,
+    toolUses: Array<Extract<LlmContentBlock, { type: 'tool_use' }>>,
+    context: ToolContext,
+    mode: TaskMode,
+  ): Promise<PendingTurnState> {
+    const pending: PendingTurnState = {
+      toolUseIds: toolUses.map((call) => call.id),
+      resolved: {},
+      awaiting: {},
+    };
+
+    for (const call of toolUses) {
+      const outcome = await this.registry.execute(call.name, call.input, context, mode);
+
+      if (outcome.kind === 'result') {
+        pending.resolved[call.id] = { content: outcome.content, isError: outcome.isError };
+        this.events.emit('agent:toolCallResult', {
+          runId: state.run.id,
+          toolCallId: call.id,
+          name: call.name,
+          ok: !outcome.isError,
+          preview: preview(outcome.content),
+        });
+        continue;
+      }
+
+      if (outcome.kind === 'file-proposal') {
+        const change: ChangeSet = {
+          id: crypto.randomUUID(),
+          runId: state.run.id,
+          workspaceUri: context.workspace.uri.toString(),
+          summary: outcome.summary,
+          operations: [outcome.operation],
+          status: 'proposed',
+          createdAt: Date.now(),
+        };
+        this.pendingChangeSets.set(change.id, change);
+        this.container.database.run(
+          'INSERT INTO change_sets (id, run_id, workspace_uri, summary, operations_json, status, created_at, tool_use_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            change.id,
+            change.runId,
+            change.workspaceUri,
+            change.summary,
+            JSON.stringify(change.operations),
+            change.status,
+            change.createdAt,
+            call.id,
+          ],
+        );
+        pending.awaiting[call.id] = { kind: 'file', subjectId: change.id, name: call.name };
+        continue;
+      }
+
+      const request: CommandRequest = {
+        ...outcome.request,
+        id: crypto.randomUUID(),
+        runId: state.run.id,
+      };
+      this.pendingCommands.set(request.id, request);
+      const now = Date.now();
+      this.container.database.run(
+        'INSERT INTO command_requests (id, run_id, workspace_uri, command, args_json, cwd, reason, risk, status, created_at, updated_at, tool_use_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          request.id,
+          request.runId,
+          request.workspaceUri,
+          request.command,
+          JSON.stringify(request.args),
+          request.cwd,
+          request.reason,
+          request.risk,
+          request.status,
+          now,
+          now,
+          call.id,
+        ],
+      );
+      pending.awaiting[call.id] = { kind: 'command', subjectId: request.id, name: call.name };
+    }
+
+    this.container.database.save();
+    return pending;
+  }
+
+  // ── Approval ───────────────────────────────────────────────
+
+  async approveChangeSet(id: string): Promise<void> {
+    const change = this.pendingChangeSets.get(id);
+    if (!change) throw new Error('No pending change set found.');
+
+    await this.container.changeSetService.apply(change);
+    this.pendingChangeSets.delete(id);
+
+    // The agent may keep editing an approved file, so its tracked hash must match what is
+    // now on disk rather than what it read before the edit.
+    const state = this.active.get(change.runId);
+    for (const operation of change.operations) {
+      if (state && operation.content !== undefined && operation.kind !== 'delete') {
+        state.fileState.recordWrite(operation.path, operation.content, state.turn);
+      } else {
+        state?.fileState.invalidate(operation.path);
+      }
+    }
+
+    await this.resolve(change.runId, id, {
+      content: `Applied: ${change.summary}`,
+    });
+  }
+
+  async rejectChangeSet(id: string): Promise<void> {
+    const change = this.pendingChangeSets.get(id);
+    if (!change) throw new Error('No pending change set found.');
+
+    this.container.changeSetService.reject(change);
+    this.pendingChangeSets.delete(id);
+
+    // A rejected proposal still owes a tool_result — an unanswered tool_use is a hard API
+    // error. It is reported as an error so the model treats it as a correction.
+    await this.resolve(change.runId, id, {
+      content: `The user rejected this change: ${change.summary}. Do not propose it again unchanged.`,
+      isError: true,
+    });
+  }
+
+  async approveCommand(id: string): Promise<string> {
+    const request = this.pendingCommands.get(id);
+    if (!request) throw new Error('No pending command found.');
+
+    this.pendingCommands.delete(id);
+    let output: string;
+    let failed = false;
+    try {
+      output = await this.container.commandRunner.run(request);
+    } catch (error) {
+      // A failing command is information the agent needs, not a reason to end the run —
+      // failing tests are frequently the whole point of running them.
+      output = error instanceof Error ? error.message : String(error);
+      failed = true;
+    }
+
+    await this.resolve(request.runId, id, { content: truncate(output), isError: failed });
+    return output;
+  }
+
+  async rejectCommand(id: string): Promise<void> {
+    const request = this.pendingCommands.get(id);
+    if (!request) throw new Error('No pending command found.');
+
+    this.container.commandRunner.reject(request);
+    this.pendingCommands.delete(id);
+
+    await this.resolve(request.runId, id, {
+      content: `The user declined to run "${request.command} ${request.args.join(' ')}".`,
+      isError: true,
+    });
+  }
+
+  /**
+   * Records one decision. When it was the last outstanding proposal for the parked turn,
+   * the tool results are assembled in their original order and the loop continues.
+   */
+  private async resolve(
+    runId: string,
+    subjectId: string,
+    outcome: { content: string; isError?: boolean },
+  ): Promise<void> {
+    const state = this.active.get(runId);
+    if (!state?.pending) return;
+
+    const entry = Object.entries(state.pending.awaiting).find(
+      ([, value]) => value.subjectId === subjectId,
+    );
+    if (!entry) return;
+
+    const [toolUseId, awaited] = entry;
+    delete state.pending.awaiting[toolUseId];
+    state.pending.resolved[toolUseId] = outcome;
+
+    this.events.emit('agent:toolCallResult', {
+      runId,
+      toolCallId: toolUseId,
+      name: awaited.name,
+      ok: !outcome.isError,
+      preview: preview(outcome.content),
+    });
+
+    if (Object.keys(state.pending.awaiting).length > 0) {
+      this.persistPending(state);
+      return;
+    }
+
+    state.transcript.push(toolResultMessage(state.pending));
+    state.pending = undefined;
+    this.persistPending(state);
+
+    const workspace = vscode.workspace.workspaceFolders?.find(
+      (folder) => folder.uri.toString() === state.run.task.workspaceUri,
+    );
+    const resolved = await this.container.providerFactory.resolveChatProvider();
+    if (!workspace || !resolved) {
+      this.finish(state, 'failed', 'Workspace or model provider is no longer available.');
+      return;
+    }
+
+    state.run.status = 'running';
+    await this.loop(state, resolved.provider, workspace, state.run.task.mode);
+  }
+
+  // ── Persistence and lifecycle ──────────────────────────────
+
+  private park(state: RunState, response: string): AgentRun {
+    state.run.status = 'awaiting_approval';
+    state.run.response = response || 'Prepared changes for your review.';
+    state.run.updatedAt = Date.now();
+    this.persistRun(state);
+    return state.run;
+  }
+
+  private finish(state: RunState, status: AgentRunStatus, response: string): AgentRun {
+    state.run.status = status;
+    state.run.response = response;
+    state.run.updatedAt = Date.now();
+    this.persistRun(state);
+    this.persistTranscript(state);
+
+    this.events.emit('agent:runFinished', {
+      runId: state.run.id,
+      status,
+      turns: state.turn,
+      usage: state.usage,
+    });
+
+    state.cancellation.dispose();
+    this.active.delete(state.run.id);
+    return state.run;
+  }
+
+  private persistRun(state: RunState): void {
+    this.container.database.run(
+      'UPDATE agent_runs SET status = ?, response = ?, updated_at = ?, turn_count = ? WHERE id = ?',
+      [state.run.status, state.run.response ?? null, state.run.updatedAt, state.turn, state.run.id],
+    );
     this.container.database.save();
   }
 
-  async run(prompt: string, mode: TaskMode, workspace: vscode.WorkspaceFolder, sessionId?: string): Promise<AgentRun> {
-    const now = Date.now(); const id = crypto.randomUUID();
-    const task: AgentTask = { id, prompt, mode, workspaceUri: workspace.uri.toString(), sessionId };
-    const run: AgentRun = { id, task, status: 'running', createdAt: now, updatedAt: now };
-    this.container.database.run('INSERT INTO agent_runs (id, workspace_uri, session_id, mode, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, task.workspaceUri, sessionId ?? null, mode, prompt, run.status, now, now]);
-    const tools = new WorkspaceTools(workspace);
-    // Seed every agent run with deterministic index context. Tool calls remain available
-    // for follow-up inspection, but small local models no longer have to guess to ask.
-    const initialContext = await tools.queryIndex(prompt);
-    const messages = [{ role: 'system', content: systemPrompt(mode) }, { role: 'user', content: `${prompt}\n\n[INITIAL REPOSITORY CONTEXT]\n${initialContext || 'No matching indexed code. Ask the user to scan the workspace rather than requesting pasted code.'}` }];
-    const maxIterations = vscode.workspace.getConfiguration('repo-intelligence').get<number>('agent.maxIterations', 2);
-    let response = '';
-    try {
-      for (let iteration = 0; iteration < maxIterations; iteration++) {
-        const envelope = parseAgentEnvelope(await this.container.ollamaClient.chatComplete(messages));
-        response = envelope.response ?? response;
-        const proposalCalls = envelope.toolCalls?.filter(call => call.name === 'propose_changes' || call.name === 'propose_command') ?? [];
-        for (const call of proposalCalls) await this.captureProposal(run, workspace, tools, call);
-        const executable = envelope.toolCalls?.filter(call => call.name !== 'propose_changes' && call.name !== 'propose_command') ?? [];
-        if (!executable.length) break;
-        const results = await Promise.all(executable.map(call => tools.execute(call)));
-        messages.push({ role: 'assistant', content: JSON.stringify(envelope) }, { role: 'user', content: `TOOL_RESULTS:\n${JSON.stringify(results)}` });
-      }
-      const hasPending = [...this.pending.values()].some(change => change.runId === id) || [...this.pendingCommands.values()].some(command => command.runId === id);
-      run.status = hasPending ? 'awaiting_approval' : 'completed'; run.response = response || (hasPending ? 'Prepared actions for review.' : 'No action was proposed.');
-    } catch (error) { run.status = 'failed'; run.response = error instanceof Error ? error.message : String(error); }
-    run.updatedAt = Date.now();
-    this.container.database.run('UPDATE agent_runs SET status = ?, response = ?, updated_at = ? WHERE id = ?', [run.status, run.response, run.updatedAt, id]); this.container.database.save();
-    return run;
+  private persistTranscript(state: RunState): void {
+    this.container.database.run('UPDATE agent_runs SET transcript_json = ? WHERE id = ?', [
+      JSON.stringify(state.transcript.all()),
+      state.run.id,
+    ]);
   }
 
-  private async captureProposal(run: AgentRun, workspace: vscode.WorkspaceFolder, tools: WorkspaceTools, call: any): Promise<void> {
-    if (call.name === 'propose_changes') {
-      const rawOps = Array.isArray(call.arguments.operations) ? call.arguments.operations : [];
-      const operations: FileOperation[] = [];
-      for (const op of rawOps) if (op && typeof op === 'object') operations.push(await tools.makeOperation(op as Record<string, unknown>));
-      if (!operations.length) return;
-      const max = vscode.workspace.getConfiguration('repo-intelligence').get<number>('agent.maxChangeSetSize', 20);
-      if (operations.length > max) throw new Error(`Agent proposed ${operations.length} file operations; configured maximum is ${max}.`);
-      const change: ChangeSet = { id: crypto.randomUUID(), runId: run.id, workspaceUri: workspace.uri.toString(), summary: String(call.arguments.summary ?? 'Agent-proposed changes'), operations, status: 'proposed', createdAt: Date.now() };
-      this.pending.set(change.id, change);
-      this.container.database.run('INSERT INTO change_sets (id, run_id, workspace_uri, summary, operations_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [change.id, run.id, change.workspaceUri, change.summary, JSON.stringify(change.operations), change.status, change.createdAt]);
-    } else {
-      const command = String(call.arguments.command ?? ''); const args = Array.isArray(call.arguments.args) ? call.arguments.args.filter((arg: unknown) => typeof arg === 'string') as string[] : [];
-      if (!isSafeCommand(command, args)) throw new Error('Unsafe command proposal rejected. Commands must be executable plus literal arguments.');
-      const request: CommandRequest = { id: crypto.randomUUID(), runId: run.id, workspaceUri: workspace.uri.toString(), command, args, cwd: workspace.uri.fsPath, reason: String(call.arguments.reason ?? 'Agent requested validation'), risk: classifyCommand(command, args), status: 'pending' };
-      this.pendingCommands.set(request.id, request); const now = Date.now();
-      this.container.database.run('INSERT INTO command_requests (id, run_id, workspace_uri, command, args_json, cwd, reason, risk, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [request.id, run.id, request.workspaceUri, command, JSON.stringify(args), request.cwd, request.reason, request.risk, request.status, now, now]);
+  private persistPending(state: RunState): void {
+    this.container.database.run('UPDATE agent_runs SET pending_turn_json = ? WHERE id = ?', [
+      state.pending ? JSON.stringify(state.pending) : null,
+      state.run.id,
+    ]);
+    this.container.database.save();
+  }
+
+  private forward(runId: string, event: { type: string } & Record<string, unknown>): void {
+    switch (event.type) {
+      case 'text_delta':
+        this.events.emit('agent:textDelta', { runId, text: String(event.text) });
+        break;
+      case 'thinking_delta':
+        this.events.emit('agent:thinkingDelta', { runId, text: String(event.text) });
+        break;
+      case 'tool_use_start':
+        this.events.emit('agent:toolCallStarted', {
+          runId,
+          toolCallId: String(event.id),
+          name: String(event.name),
+        });
+        break;
+      case 'tool_use_input':
+        this.events.emit('agent:toolCallInput', {
+          runId,
+          toolCallId: String(event.id),
+          partialJson: String(event.partialJson),
+        });
+        break;
+      case 'error':
+        this.events.emit('agent:error', { runId, message: String(event.message) });
+        break;
+      default:
+        break;
     }
   }
-  getPendingChangeSets(): ChangeSet[] { return [...this.pending.values()]; }
-  getPendingCommands(): CommandRequest[] { return [...this.pendingCommands.values()]; }
-  async approveChangeSet(id: string): Promise<void> { const change = this.pending.get(id); if (!change) throw new Error('No pending change set found.'); await this.container.changeSetService.apply(change); this.pending.delete(id); }
-  rejectChangeSet(id: string): void { const change = this.pending.get(id); if (!change) throw new Error('No pending change set found.'); this.container.changeSetService.reject(change); this.pending.delete(id); }
-  async approveCommand(id: string): Promise<string> { const command = this.pendingCommands.get(id); if (!command) throw new Error('No pending command found.'); const output = await this.container.commandRunner.run(command); this.pendingCommands.delete(id); return output; }
-  rejectCommand(id: string): void { const command = this.pendingCommands.get(id); if (!command) throw new Error('No pending command found.'); this.container.commandRunner.reject(command); this.pendingCommands.delete(id); }
+
+  // ── Queries used by commands and the webview ───────────────
+
+  getPendingChangeSets(): ChangeSet[] {
+    return [...this.pendingChangeSets.values()];
+  }
+
+  getPendingCommands(): CommandRequest[] {
+    return [...this.pendingCommands.values()];
+  }
+
+  revokeSessionTrust(workspaceUri?: string): void {
+    const now = Date.now();
+    if (workspaceUri) {
+      this.container.database.run(
+        'UPDATE agent_session_trust SET trusted = 0, updated_at = ? WHERE workspace_uri = ?',
+        [now, workspaceUri],
+      );
+    } else {
+      this.container.database.run('UPDATE agent_session_trust SET trusted = 0, updated_at = ?', [now]);
+    }
+    this.container.database.save();
+  }
 }
-function classifyCommand(command: string, args: string[]) { return /^(git|npm|pnpm|yarn|curl|wget|ssh|rm|mv)$/i.test(command) || args.some(arg => /install|remove|delete|reset|push|publish/i.test(arg)) ? 'high' : 'medium'; }
-function systemPrompt(mode: TaskMode): string { return `You are a local VS Code coding agent in ${mode.toUpperCase()} mode. Return ONLY JSON: {"response":"user-facing concise text","toolCalls":[{"id":"unique","name":"read_file|search_files|query_index|propose_changes|propose_command","arguments":{}}]}. INITIAL REPOSITORY CONTEXT is supplied with every request: use it directly and do not ask the user to paste code that is already present there. Use tools only to inspect additional files before claiming facts. In explain/plan mode never propose changes or commands. In implement mode, do not return standalone CSS/code as an answer. You must inspect the relevant file and return one propose_changes tool call containing the complete replacement content for every affected file; the extension will show a diff and ask for approval. If no relevant code is indexed, ask the user to run Scan Repository. Never propose shell strings, pipes, redirects, or package installs. Commands require propose_command with executable command and literal args.`; }
+
+// ── Helpers ──────────────────────────────────────────────────
+
+/**
+ * Builds the single user message answering a parked turn.
+ *
+ * All results go in ONE message, in the original tool_use order. Splitting them across
+ * several messages trains the model out of making parallel tool calls, and leaves the
+ * assistant turn partially unanswered in the meantime.
+ */
+export function toolResultMessage(pending: PendingTurnState): LlmMessage {
+  const blocks: LlmToolResultBlock[] = pending.toolUseIds.map((id) => {
+    const resolved = pending.resolved[id];
+    return {
+      type: 'tool_result',
+      toolUseId: id,
+      // A missing entry should be impossible, but an unanswered tool_use is a hard API
+      // error — so failing closed with a placeholder beats omitting the block.
+      content: resolved?.content ?? 'No result was produced for this tool call.',
+      isError: resolved ? resolved.isError : true,
+    };
+  });
+  return { role: 'user', content: blocks };
+}
+
+function subjectIds(pending: PendingTurnState, kind: 'file' | 'command'): string[] {
+  return Object.values(pending.awaiting)
+    .filter((entry) => entry.kind === kind)
+    .map((entry) => entry.subjectId);
+}
+
+function textOf(content: LlmContentBlock[]): string {
+  return content
+    .filter((block): block is Extract<LlmContentBlock, { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+}
+
+function preview(content: string, limit = 200): string {
+  const collapsed = content.replace(/\s+/g, ' ').trim();
+  return collapsed.length > limit ? `${collapsed.slice(0, limit)}…` : collapsed;
+}
+
+function truncate(output: string, limit = 8000): string {
+  if (output.length <= limit) return output;
+  // Keep the tail: compiler and test output puts the summary at the end.
+  return `[output truncated to the last ${limit} characters]\n…${output.slice(-limit)}`;
+}

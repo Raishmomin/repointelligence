@@ -23,6 +23,7 @@ export const COMMANDS = {
   REVOKE_SESSION_TRUST: `${EXTENSION_ID}.revokeSessionTrust`,
   SET_API_KEY: `${EXTENSION_ID}.setApiKey`,
   CLEAR_API_KEY: `${EXTENSION_ID}.clearApiKey`,
+  CANCEL_AGENT: `${EXTENSION_ID}.cancelAgent`,
 } as const;
 
 // ── Views ─────────────────────────────────────────────────────
@@ -83,4 +84,4 @@ export const DEFAULT_EXCLUDE_DIRS = new Set([
 
 // ── Database ──────────────────────────────────────────────────
 export const DB_FILENAME = 'repo-intelligence.db';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
