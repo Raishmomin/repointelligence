@@ -10,6 +10,7 @@ import { FileRepository } from './layer2-context/database/repositories/FileRepos
 import { SymbolRepository } from './layer2-context/database/repositories/SymbolRepository';
 import { DependencyRepository } from './layer2-context/database/repositories/DependencyRepository';
 import { EmbeddingRepository } from './layer2-context/database/repositories/EmbeddingRepository';
+import { ChatRepository } from './layer2-context/database/repositories/ChatRepository';
 import { RepositoryScanner } from './layer1-intelligence/scanner/RepositoryScanner';
 import { FrameworkDetector } from './layer1-intelligence/framework/FrameworkDetector';
 import { PackageDetector } from './layer1-intelligence/packages/PackageDetector';
@@ -85,6 +86,10 @@ export class ServiceContainer {
 
   get dependencyRepository(): DependencyRepository {
     return this.getOrCreate('dependencyRepository', () => new DependencyRepository(this.database));
+  }
+
+  get chatRepository(): ChatRepository {
+    return this.getOrCreate('chatRepository', () => new ChatRepository(this.database));
   }
 
   get embeddingRepository(): EmbeddingRepository {

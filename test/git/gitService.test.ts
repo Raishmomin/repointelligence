@@ -12,19 +12,29 @@ import { GitService } from '../../src/layer1-intelligence/git/GitService';
  */
 
 let repo: string;
-let available = true;
 
 function git(args: string[], cwd: string): string {
   return childProcess.execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
-beforeAll(() => {
+/**
+ * Probed at module load, not in beforeAll.
+ *
+ * `describe.runIf` below is evaluated while the module is being read, which happens before
+ * any hook runs — so a flag set inside beforeAll is still at its initial value when the
+ * skip decision is made, and the suite would run anyway on a machine without git.
+ */
+const available = ((): boolean => {
   try {
     childProcess.execFileSync('git', ['--version'], { stdio: 'ignore' });
+    return true;
   } catch {
-    available = false;
-    return;
+    return false;
   }
+})();
+
+beforeAll(() => {
+  if (!available) return;
 
   repo = fs.mkdtempSync(path.join(os.tmpdir(), 'repoanalyser-git-'));
   git(['init', '-q'], repo);
@@ -39,7 +49,7 @@ afterAll(() => {
   if (repo) fs.rmSync(repo, { recursive: true, force: true });
 });
 
-describe.runIf(available !== false)('GitService', () => {
+describe.runIf(available)('GitService', () => {
   describe('repository detection', () => {
     it('recognises a repository', () => {
       expect(new GitService(repo).isRepository()).toBe(true);

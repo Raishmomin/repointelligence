@@ -31,11 +31,11 @@ describe('host → webview message contract', () => {
   });
 
   it('requires camelCase on sessions too', () => {
-    const session: SessionDto = { id: 's1', title: 'Session', createdAt: 1 };
+    const session: SessionDto = { id: 's1', title: 'Session', createdAt: 1, updatedAt: 2 };
     expect(session.createdAt).toBe(1);
 
     // @ts-expect-error — this was the live bug: the host posted the raw database row.
-    const wrong: SessionDto = { id: 's1', title: 'Session', created_at: 1 };
+    const wrong: SessionDto = { id: 's1', title: 'Session', created_at: 1, updated_at: 2 };
     expect(wrong).toBeDefined();
   });
 

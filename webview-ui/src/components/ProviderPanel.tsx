@@ -8,6 +8,7 @@ import type {
 import type { ProviderOption, WireProviderField } from '@providers/descriptor.types';
 import { isFieldVisible, validateFieldFormat } from '@providers/descriptor.types';
 import { rpc } from '../messaging/rpc';
+import { Panel } from './Panel';
 
 type Draft = Record<string, string | number | undefined>;
 
@@ -300,34 +301,5 @@ function Field({
       {field.description && <span className="field-hint">{field.description}</span>}
       {warning && <span className="field-warning">{warning}</span>}
     </label>
-  );
-}
-
-function Panel({
-  title,
-  onClose,
-  onBack,
-  children,
-}: {
-  title: string;
-  onClose(): void;
-  onBack?(): void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="panel">
-      <header className="panel-header">
-        {onBack && (
-          <button type="button" className="btn btn-small" onClick={onBack}>
-            ←
-          </button>
-        )}
-        <h2 className="panel-title">{title}</h2>
-        <button type="button" className="btn btn-small" onClick={onClose} title="Close">
-          ✕
-        </button>
-      </header>
-      <div className="panel-body">{children}</div>
-    </div>
   );
 }

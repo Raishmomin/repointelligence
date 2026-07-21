@@ -51,6 +51,8 @@ export interface SessionDto {
   id: string;
   title: string;
   createdAt: number;
+  /** Last message time, so the list can sort by activity rather than creation. */
+  updatedAt: number;
 }
 
 export interface ModelOptionDto {

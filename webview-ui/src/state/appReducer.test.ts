@@ -86,6 +86,39 @@ describe('appReducer', () => {
     });
   });
 
+  describe('sessions', () => {
+    const CHATS = [
+      { id: 's1', title: 'modify footer design', createdAt: 1, updatedAt: 20 },
+      { id: 's2', title: 'New Chat Session', createdAt: 2, updatedAt: 10 },
+    ];
+
+    it('stores the list the host pushes', () => {
+      const state = host({ type: 'sessions', sessions: CHATS, activeSessionId: 's1' });
+      expect(state.sessions).toEqual(CHATS);
+      expect(state.activeSessionId).toBe('s1');
+    });
+
+    it('follows the host when the active session changes', () => {
+      // handleSelectSession re-posts the list precisely so this stays in step; the panel
+      // marks the active row from this field alone.
+      let state = host({ type: 'sessions', sessions: CHATS, activeSessionId: 's1' });
+      state = host({ type: 'sessions', sessions: CHATS, activeSessionId: 's2' }, state);
+      expect(state.activeSessionId).toBe('s2');
+    });
+
+    it('keeps the order the host sent rather than re-sorting', () => {
+      // Ordering is by last activity, which only the host can know.
+      const state = host({ type: 'sessions', sessions: CHATS, activeSessionId: null });
+      expect(state.sessions.map((s) => s.id)).toEqual(['s1', 's2']);
+    });
+
+    it('handles having no sessions at all', () => {
+      const state = host({ type: 'sessions', sessions: [], activeSessionId: null });
+      expect(state.sessions).toEqual([]);
+      expect(state.activeSessionId).toBeNull();
+    });
+  });
+
   describe('mode', () => {
     it('applies optimistically so the toggle feels instant', () => {
       const state = appReducer(initialState, { type: 'setMode', mode: 'plan' });

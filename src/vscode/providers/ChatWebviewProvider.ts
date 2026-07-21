@@ -3,7 +3,6 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as vscode from 'vscode';
-import { v4 as uuid } from 'uuid';
 import { ServiceContainer } from '../../container';
 import { Logger } from '../../shared/Logger';
 import { ProposalContentProvider } from './ProposalContentProvider';
@@ -14,19 +13,14 @@ import type {
   AgentStreamStep,
   ExtensionToWebview,
   RpcMethod,
-  SessionDto,
   TaskModeDto,
 } from '../../shared/types/webview.types';
 import { EventBus } from '../../shared/EventBus';
 import { ChatMessage } from '../../shared/types/context.types';
 import { AgentRun, ChangeSet, CommandRequest } from '../../shared/types/agent.types';
 
-/** Maps the database's snake_case rows onto the protocol's shape. */
-function toSessionDtos(
-  rows: Array<{ id: string; title: string; created_at: number }>,
-): SessionDto[] {
-  return rows.map(row => ({ id: row.id, title: row.title, createdAt: row.created_at }));
-}
+// Session and message SQL now lives in ChatRepository. The mapping to the protocol's
+// camelCase shape happens there too, which is what the messageContract test guards.
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
@@ -353,73 +347,56 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    // Load sessions
-    let sessions = this.container.database.query<{ id: string; title: string; created_at: number }>(
-      'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
-      [this.activeProjectId]
-    );
+    const sessions = this.container.chatRepository.listSessions(this.activeProjectId);
 
     if (sessions.length > 0) {
       this.activeSessionId = sessions[0].id;
       await this.loadActiveSessionMessages();
+      this.pushSessions();
     } else {
+      // handleNewSession pushes the list itself, so re-querying here would be redundant.
       await this.handleNewSession();
-      // Re-query to get the new session
-      sessions = this.container.database.query<{ id: string; title: string; created_at: number }>(
-        'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
-        [this.activeProjectId]
-      );
     }
-
-    // Send sessions list
-    this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
 
     // Send Ollama health status
     const health = await this.container.ollamaClient.checkHealth();
     this.postToWebview({ type: 'ollamaHealth', health });
   }
 
+  /** Pushes the session list with whichever session is currently active. */
+  private pushSessions(): void {
+    if (!this.activeProjectId) return;
+    this.postToWebview({
+      type: 'sessions',
+      sessions: this.container.chatRepository.listSessions(this.activeProjectId),
+      activeSessionId: this.activeSessionId,
+    });
+  }
+
   private async handleNewSession(): Promise<void> {
     if (!this.activeProjectId) return;
 
-    const sessionId = uuid();
-    const now = Date.now();
-    this.container.database.run(
-      'INSERT INTO chat_sessions (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [sessionId, this.activeProjectId, 'New Chat Session', now, now]
-    );
-    this.container.database.save();
-
-    this.activeSessionId = sessionId;
-    
-    // Refresh sessions list
-    const sessions = this.container.database.query<{ id: string; title: string; created_at: number }>(
-      'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
-      [this.activeProjectId]
-    );
-    this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
+    this.activeSessionId = this.container.chatRepository.createSession(this.activeProjectId);
+    this.pushSessions();
     this.postToWebview({ type: 'messages', messages: [] });
   }
 
   private async handleSelectSession(sessionId: string): Promise<void> {
     this.activeSessionId = sessionId;
     await this.loadActiveSessionMessages();
+    // Re-pushed so the panel's active marker follows the host. Without this the two
+    // disagree about which session is selected as soon as the user switches.
+    this.pushSessions();
   }
 
   private async handleDeleteSession(sessionId: string): Promise<void> {
-    this.container.database.run('DELETE FROM chat_messages WHERE session_id = ?', [sessionId]);
-    this.container.database.run('DELETE FROM chat_sessions WHERE id = ?', [sessionId]);
-    this.container.database.save();
+    this.container.chatRepository.deleteSession(sessionId);
 
     if (this.activeSessionId === sessionId) {
       this.activeSessionId = null;
       await this.handleReady();
     } else {
-      const sessions = this.container.database.query<{ id: string; title: string; created_at: number }>(
-        'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
-        [this.activeProjectId]
-      );
-      this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
+      this.pushSessions();
     }
   }
 
@@ -432,30 +409,25 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private async recordMessage(role: 'user' | 'assistant', content: string): Promise<void> {
     if (!this.activeSessionId) return;
 
-    this.container.database.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-      [uuid(), this.activeSessionId, role, content, Date.now()],
-    );
-    this.container.database.save();
+    this.container.chatRepository.addMessage(this.activeSessionId, role, content);
+
+    // Name the session after its opening prompt. This previously lived only in the legacy
+    // handleSendMessage path, so every session started from the React panel kept the
+    // placeholder title — which made a session list useless the moment you had two.
+    if (role === 'user' && this.container.chatRepository.titleFromFirstMessage(this.activeSessionId, content)) {
+      this.pushSessions();
+    }
+
     await this.loadActiveSessionMessages();
   }
 
   private async loadActiveSessionMessages(): Promise<void> {
     if (!this.activeSessionId) return;
 
-    const dbMessages = this.container.database.query<{ id: string; role: string; content: string; created_at: number }>(
-      'SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC',
-      [this.activeSessionId]
-    );
-
-    const messages = dbMessages.map(m => ({
-      id: m.id,
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      createdAt: m.created_at,
-    }));
-
-    this.postToWebview({ type: 'messages', messages });
+    this.postToWebview({
+      type: 'messages',
+      messages: this.container.chatRepository.listMessages(this.activeSessionId),
+    });
   }
 
   private async handleSendMessage(text: string): Promise<void> {
@@ -463,39 +435,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       throw new Error('No active session or project context.');
     }
 
-    const now = Date.now();
-    const userMsgId = uuid();
-
     this.postToWebview({ type: 'status', status: 'thinking', message: 'Understanding your request…' });
-    // 1. Save user message to database
-    this.container.database.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-      [userMsgId, this.activeSessionId, 'user', text, now]
-    );
 
-    // Update session title on the first message
-    const msgCount = this.container.database.queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM chat_messages WHERE session_id = ?',
-      [this.activeSessionId]
-    );
-    if (msgCount && msgCount.count === 1) {
-      const shortTitle = text.length > 30 ? text.substring(0, 30) + '...' : text;
-      this.container.database.run(
-        'UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?',
-        [shortTitle, now, this.activeSessionId]
-      );
-      
-      const sessions = this.container.database.query<{ id: string; title: string; created_at: number }>(
-        'SELECT id, title, created_at FROM chat_sessions WHERE project_id = ? ORDER BY created_at DESC',
-        [this.activeProjectId]
-      );
-      this.postToWebview({ type: 'sessions', sessions: toSessionDtos(sessions), activeSessionId: this.activeSessionId });
-    }
-
-    this.container.database.save();
-    
-    // Reload messages to show the user message in UI
-    await this.loadActiveSessionMessages();
+    // Persist, title and reload — the same path the agent flow uses, so the two cannot
+    // drift again.
+    await this.recordMessage('user', text);
 
     // 2. Fetch history context
     const dbMessages = this.container.database.query<{ id: string; role: string; content: string; created_at: number }>(
@@ -556,15 +500,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     );
 
     // 5. Save assistant response to DB
-    const assistantMsgId = uuid();
-    this.container.database.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-      [assistantMsgId, this.activeSessionId, 'assistant', fullResponse, Date.now()]
-    );
-    this.container.database.save();
+    await this.recordMessage('assistant', fullResponse);
 
     this.postToWebview({ type: 'status', status: 'idle' });
-    await this.loadActiveSessionMessages();
   }
 
   /** Main sidebar path: requests become auditable agent runs, not free-form code snippets. */

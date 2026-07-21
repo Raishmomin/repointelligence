@@ -1,0 +1,15 @@
+{
+  // The main tsconfig excludes `test` because it sets `rootDir: "src"` for the build.
+  // That left the test suite entirely untypechecked — and `messageContract.test.ts` is
+  // built almost entirely out of compile-time assertions (`@ts-expect-error`, typed
+  // literals of every wire message), so its whole value depends on something actually
+  // checking it. Vitest transpiles via esbuild and does not type check, so without this
+  // file a contract drift shows up as a runtime-passing test that no longer compiles.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "out", "webview-ui"]
+}

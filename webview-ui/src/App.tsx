@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { ExtensionToWebview, TaskModeDto } from '@shared/webview.types';
 import { ComposerBar } from './components/ComposerBar';
 import { ProviderPanel } from './components/ProviderPanel';
+import { SessionPanel } from './components/SessionPanel';
 import { Timeline } from './components/Timeline';
 import { post, rejectAllPending, resolveRpc } from './messaging/rpc';
 import { appReducer, initialState } from './state/appReducer';
@@ -9,6 +10,7 @@ import { appReducer, initialState } from './state/appReducer';
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const [showProviders, setShowProviders] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -54,6 +56,14 @@ export function App() {
       <header className="app-header">
         <span className="app-title">{state.projectName ?? 'Repo Intelligence'}</span>
         {state.framework && <span className="app-framework">{state.framework}</span>}
+        <button
+          type="button"
+          className="btn btn-small app-chats"
+          title="Chats"
+          onClick={() => setShowSessions(true)}
+        >
+          ☰
+        </button>
         {busy && (
           <button type="button" className="btn btn-small" onClick={() => post({ type: 'cancelRun' })}>
             Stop
@@ -67,7 +77,16 @@ export function App() {
         </div>
       )}
 
-      {showProviders ? (
+      {showSessions ? (
+        <SessionPanel
+          sessions={state.sessions}
+          activeSessionId={state.activeSessionId}
+          onClose={() => setShowSessions(false)}
+          onNew={() => post({ type: 'newSession' })}
+          onSelect={(sessionId) => post({ type: 'selectSession', sessionId })}
+          onDelete={(sessionId) => post({ type: 'deleteSession', sessionId })}
+        />
+      ) : showProviders ? (
         <ProviderPanel
           onClose={() => setShowProviders(false)}
           onSaved={() => post({ type: 'refreshModels' })}

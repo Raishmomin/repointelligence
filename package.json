@@ -368,7 +368,7 @@
     "vscode:prepublish": "npm run build",
     "build": "npm run build:webview && node esbuild.js --production",
     "watch": "node esbuild.js --watch",
-    "typecheck": "tsc --noEmit && cd webview-ui && npm run typecheck",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && cd webview-ui && npm run typecheck",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "test": "vitest run && cd webview-ui && npm test",

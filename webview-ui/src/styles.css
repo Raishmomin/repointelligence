@@ -572,3 +572,79 @@ body {
   font-size: 10px;
   color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
 }
+
+/* ── Sessions ───────────────────────────────────────────────── */
+
+.app-chats {
+  margin-left: auto;
+}
+
+.session-new {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+}
+
+.session-row:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-row-active {
+  background: var(--vscode-list-activeSelectionBackground);
+}
+
+.session-row-active .session-title {
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+/* The row is a button so the whole area is clickable and keyboard-reachable, but it
+   should read as a list item rather than a control. */
+.session-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-when {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Revealed on hover so a narrow row is not permanently crowded by a control that is
+   destructive and rarely wanted. Focus keeps it reachable without a mouse. */
+.session-delete {
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.session-row:hover .session-delete,
+.session-delete:focus-visible {
+  opacity: 1;
+}
