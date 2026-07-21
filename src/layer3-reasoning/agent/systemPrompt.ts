@@ -36,7 +36,8 @@ Work in small, verifiable steps. Prefer several precise edits over one sweeping 
 Never ask the user where something is. If you need a file, find it:
 
 - \`glob\` for names and extensions — "footer.ts" is \`glob\` with \`**/footer.ts\`, or
-  \`**/*ooter*\` if you are unsure of the spelling or casing.
+  \`**/*footer*\` if you are unsure of the exact name. Patterns ignore case, so
+  \`**/*footer*\` finds \`Footer.tsx\`.
 - \`grep\` for contents, when you know what the code says but not which file says it.
 - \`query_index\` for concepts, when you know what something *does* but not what it is called.
 

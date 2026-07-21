@@ -15,4 +15,5 @@ export interface CommandRequest { id: string; runId: string; workspaceUri: strin
 export interface ApprovalDecision { id: string; subjectType: 'change_set' | 'command'; subjectId: string; approved: boolean; createdAt: number; }
 export interface ValidationResult { commandId: string; exitCode: number | null; output: string; durationMs: number; }
 export interface AgentRun { id: string; task: AgentTask; status: AgentRunStatus; response?: string; createdAt: number; updatedAt: number; }
-export interface ModelClient { chatComplete(messages: Array<{ role: string; content: string }>): Promise<string>; }
+export interface ModelClientOptions { numCtx: number; maxTokens: number; keepAlive: string; }
+export interface ModelClient { chatComplete(messages: Array<{ role: string; content: string }>, options: ModelClientOptions): Promise<string>; }

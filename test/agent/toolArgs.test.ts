@@ -61,7 +61,19 @@ describe('tool argument validation', () => {
     });
 
     it('rejects an empty path', () => {
-      expect(() => readFileTool.parseArgs({ path: '' })).toThrow(/non-empty/);
+      expect(() => readFileTool.parseArgs({ path: '' })).toThrow();
+    });
+
+    it('rejects a missing path', () => {
+      expect(() => readFileTool.parseArgs({})).toThrow();
+    });
+
+    it('tells the model to search first when it has no path', () => {
+      // The observed failure is a model queueing read_file alongside the glob meant to
+      // produce the path, so it has nothing to fill in. Naming the remedy turns that into
+      // a one-turn correction instead of a repeated call.
+      expect(() => readFileTool.parseArgs({})).toThrow(/glob or grep first/);
+      expect(() => readFileTool.parseArgs({ path: '' })).toThrow(/glob or grep first/);
     });
   });
 

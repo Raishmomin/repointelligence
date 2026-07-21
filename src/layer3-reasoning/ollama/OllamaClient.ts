@@ -5,7 +5,7 @@ import * as https from 'https';
 import { Readable } from 'stream';
 import { Logger } from '../../shared/Logger';
 import { OllamaHealthStatus, ModelInfo } from '../../shared/types/ollama.types';
-import { ModelClient } from '../../shared/types/agent.types';
+import { ModelClient, ModelClientOptions } from '../../shared/types/agent.types';
 import { rankModels } from '../providers/ollamaModels';
 
 function customFetch(url: string, options: any = {}): Promise<any> {
@@ -286,10 +286,30 @@ export class OllamaClient implements ModelClient {
    * Goes through the same model resolution as `chatStream`. It previously did not, so a
    * configured-but-not-installed model failed the agent outright while ordinary chat
    * silently fell back — the agent is exactly where a clear failure matters most.
+   *
+   * `numCtx` must be passed explicitly and must match the window the caller budgeted
+   * against. Ollama defaults to a ~4k context regardless of what the model supports, and
+   * silently truncates anything longer from the front of the prompt — which is exactly
+   * where the system prompt and the tool catalogue live. The symptom is not an error but
+   * a model that answers as though it had no tools.
+   *
+   * `keepAlive` holds the model in memory between turns. Without it Ollama evicts after
+   * its own idle default, so a multi-turn agent run can pay a cold load partway through,
+   * and the KV cache the byte-stable prompt prefix exists to exploit is discarded with it.
    */
-  async chatComplete(messages: { role: string; content: string }[]): Promise<string> {
+  async chatComplete(
+    messages: { role: string; content: string }[],
+    options: ModelClientOptions,
+  ): Promise<string> {
     const model = await this.resolveChatModel();
-    const response = await this.client.chat({ model, messages, stream: false, format: 'json' });
+    const response = await this.client.chat({
+      model,
+      messages,
+      stream: false,
+      format: 'json',
+      keep_alive: options.keepAlive,
+      options: { num_ctx: options.numCtx, num_predict: options.maxTokens },
+    });
     return response.message.content;
   }
 }

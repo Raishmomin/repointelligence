@@ -37,7 +37,14 @@ export class OllamaProvider implements LlmProvider {
   get contextWindow(): number {
     return vscode.workspace
       .getConfiguration('repo-intelligence')
-      .get<number>('ollama.contextWindow', 32_000);
+      .get<number>('ollama.contextWindow', 16_384);
+  }
+
+  /** How long Ollama holds the model in memory once a turn finishes. */
+  get keepAlive(): string {
+    return vscode.workspace
+      .getConfiguration('repo-intelligence')
+      .get<string>('ollama.keepAlive', '30m');
   }
 
   /** The model this provider will actually use, for the status bar and run diagnostics. */
@@ -95,7 +102,13 @@ export class OllamaProvider implements LlmProvider {
 
     let raw: string;
     try {
-      raw = await this.client.chatComplete(messages);
+      raw = await this.client.chatComplete(messages, {
+        // Sourced from the same getter the agent's TranscriptManager budgets against, so
+        // the window Ollama enforces and the window we pack for are always one number.
+        numCtx: this.contextWindow,
+        maxTokens: request.maxTokens,
+        keepAlive: this.keepAlive,
+      });
     } catch (error) {
       if (request.token.isCancellationRequested) {
         return { content: [], stopReason: 'cancelled', usage: { inputTokens: 0, outputTokens: 0 } };

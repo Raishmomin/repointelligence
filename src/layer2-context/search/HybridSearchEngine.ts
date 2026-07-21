@@ -8,6 +8,32 @@ import { SearchResult } from '../../shared/types/context.types';
 import { Logger } from '../../shared/Logger';
 import { cosineSimilarity, decodeVector } from '../database/vectorCodec';
 
+/**
+ * Words carrying no retrieval signal in a question about code.
+ *
+ * Split in two because they fail differently. The English filler is noise anywhere. The
+ * second group are words that *look* like search terms but appear in substantially every
+ * file in a codebase — "file", "path", "code", "function" — so matching on them ranks the
+ * whole repository equally. A question like "can you find the footer file path?" is
+ * otherwise seven keywords of which one is the actual subject.
+ *
+ * This only affects which terms are *searched for*. IDF weighting below handles the
+ * general case; this list handles the common case cheaply and predictably.
+ */
+const STOPWORDS = new Set([
+  // English filler
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one',
+  'our', 'out', 'his', 'has', 'had', 'how', 'its', 'who', 'did', 'yes', 'why', 'what',
+  'when', 'where', 'which', 'this', 'that', 'with', 'from', 'they', 'them', 'then',
+  'have', 'been', 'were', 'will', 'would', 'could', 'should', 'does', 'your', 'about',
+  'into', 'some', 'any', 'please', 'tell', 'give', 'want', 'need', 'make', 'get',
+  // Words that match nearly every file in a code repository
+  'file', 'files', 'path', 'paths', 'code', 'codebase', 'function', 'functions',
+  'method', 'methods', 'class', 'classes', 'line', 'lines', 'find', 'show', 'look',
+  'search', 'name', 'names', 'type', 'types', 'value', 'values', 'return', 'returns',
+  'import', 'imports', 'export', 'exports', 'const', 'let', 'var', 'string', 'number',
+]);
+
 export class HybridSearchEngine {
   private readonly embeddingsPresent = new Map<string, boolean>();
 
@@ -74,62 +100,120 @@ export class HybridSearchEngine {
   }
 
   /**
-   * Fast keyword search using SQL LIKE querying and token frequency heuristic.
+   * Keyword search over indexed content and paths, ranked by IDF-weighted term frequency.
+   *
+   * Weighting by rarity is what makes this usable on a natural-language question rather
+   * than a bare identifier: "can you find the footer file path?" carries one term that
+   * identifies anything and six that match most of the repository.
    */
   private keywordSearch(projectId: string, query: string, limit: number): SearchResult[] {
-    const keywords = query
+    const tokens = query
       .toLowerCase()
       .replace(/[^a-z0-9_]/g, ' ')
       .split(/\s+/)
       .filter(k => k.length > 2);
 
-    if (keywords.length === 0) return [];
+    if (tokens.length === 0) return [];
+
+    // Fall back to the raw tokens when a query is *only* stopwords, so a vague question
+    // still retrieves something rather than nothing.
+    const meaningful = tokens.filter(k => !STOPWORDS.has(k));
+    const keywords = [...new Set(meaningful.length > 0 ? meaningful : tokens)];
 
     // Construct SQL to search in content
     // A component can be named Footer while its implementation never contains the word
     // "footer". Search both indexed content and the relative file path.
     const likeClauses = keywords.map(() => '(content LIKE ? OR path LIKE ?)').join(' OR ');
-    const params = [projectId, ...keywords.flatMap(k => [`%${k}%`, `%${k}%`])];
+    // Candidates are capped, so the cap has to select rather than truncate arbitrarily.
+    // Ordering by how many keywords hit the path puts the file *named* after the subject
+    // in the running even in a repository where hundreds of files mention it.
+    const pathRank = keywords.map(() => '(CASE WHEN path LIKE ? THEN 1 ELSE 0 END)').join(' + ');
 
     const files = this.database.query<{ path: string; content: string; category: string }>(
-      `SELECT path, content, category FROM files WHERE project_id = ? AND (${likeClauses}) LIMIT 50`,
-      params
+      `SELECT path, content, category FROM files WHERE project_id = ? AND (${likeClauses}) ` +
+        `ORDER BY (${pathRank}) DESC LIMIT 50`,
+      [
+        projectId,
+        ...keywords.flatMap(k => [`%${k}%`, `%${k}%`]),
+        ...keywords.map(k => `%${k}%`),
+      ]
     );
 
-    const results: SearchResult[] = [];
-    for (const file of files) {
-      // Calculate tf-idf score style heuristics
+    const weights = this.inverseDocumentFrequency(projectId, keywords);
+
+    const scored = files.map(file => {
       let score = 0;
       const fileContentLower = file.content.toLowerCase();
-
-      for (const kw of keywords) {
-        const count = (fileContentLower.match(new RegExp(kw, 'g')) || []).length;
-        if (count > 0) {
-          score += count * 0.1; // term frequency
-        }
-      }
-
-      // Boost score slightly if keyword is in the file path
       const pathLower = file.path.toLowerCase();
+
       for (const kw of keywords) {
-        if (pathLower.includes(kw)) {
-          score += 1.0;
-        }
+        const weight = weights.get(kw) ?? 1;
+        // Log-damped term frequency: a file repeating a word 500 times is more relevant
+        // than one mentioning it twice, but not 250 times more.
+        const count = (fileContentLower.match(new RegExp(kw, 'g')) || []).length;
+        if (count > 0) score += Math.log(1 + count) * weight;
+        // A path match is the strongest single signal available without embeddings.
+        if (pathLower.includes(kw)) score += 2.0 * weight;
       }
 
-      // Normalize score between 0 and 1
-      const normalizedScore = Math.min(score / 5.0, 1.0);
+      return { file, score };
+    });
 
-      results.push({
+    // Normalized against the best score in this result set rather than a fixed divisor.
+    // The scores are IDF-weighted sums with no meaningful upper bound, so a constant would
+    // either saturate every result at 1.0 or squash them all toward 0 depending on query
+    // length. The hybrid blend downstream assumes a 0..1 range.
+    const best = Math.max(...scored.map(s => s.score), 0);
+
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ file, score }) => ({
         filePath: file.path,
         content: file.content,
-        score: normalizedScore,
-        matchType: 'keyword',
+        score: best > 0 ? parseFloat((score / best).toFixed(4)) : 0,
+        matchType: 'keyword' as const,
         highlights: [],
-      });
+      }));
+  }
+
+  /**
+   * How much each keyword should count, by how rare it is in this project.
+   *
+   * Without this, term frequency alone means a file that happens to repeat a common word
+   * outranks the file actually named after the subject of the question. A term present in
+   * every file scores 0 and drops out; a term in one file out of hundreds dominates.
+   */
+  private inverseDocumentFrequency(projectId: string, keywords: string[]): Map<string, number> {
+    const weights = new Map<string, number>();
+
+    // Conditional aggregation so every keyword's document frequency comes back from one
+    // pass over the table. A COUNT per keyword would be correct but would multiply the
+    // scans this search costs — `content LIKE '%x%'` cannot use an index, so each one
+    // reads every file body in the project.
+    const counts = keywords
+      .map((_, index) => `SUM(CASE WHEN content LIKE ? OR path LIKE ? THEN 1 ELSE 0 END) AS k${index}`)
+      .join(', ');
+
+    const row = this.database.queryOne<Record<string, number>>(
+      `SELECT COUNT(*) AS total, ${counts} FROM files WHERE project_id = ?`,
+      [...keywords.flatMap(k => [`%${k}%`, `%${k}%`]), projectId]
+    );
+
+    const total = row?.total ?? 0;
+    if (total === 0) {
+      for (const kw of keywords) weights.set(kw, 1);
+      return weights;
     }
 
-    return results.slice(0, limit);
+    keywords.forEach((kw, index) => {
+      const matches = row?.[`k${index}`] ?? 0;
+      // Floored rather than zeroed: a query whose every term is common should still rank
+      // its results by term frequency instead of collapsing them all to nothing.
+      weights.set(kw, Math.max(Math.log((total + 1) / (matches + 1)), 0.01));
+    });
+
+    return weights;
   }
 
   /**

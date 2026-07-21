@@ -193,9 +193,14 @@
         },
         "repo-intelligence.ollama.contextWindow": {
           "type": "number",
-          "default": 32000,
+          "default": 16384,
           "minimum": 4096,
-          "description": "Assumed context window of the local Ollama model, used to decide when to compact the agent transcript."
+          "markdownDescription": "Context window requested from the local Ollama model. Sent as `num_ctx` and used to decide when to compact the agent transcript. Raising this lets the agent hold more of the repository in view, but the KV cache grows with it — set past what your GPU can hold and the model spills to CPU, which is far slower than a smaller window."
+        },
+        "repo-intelligence.ollama.keepAlive": {
+          "type": "string",
+          "default": "30m",
+          "markdownDescription": "How long Ollama keeps the model loaded after a turn, as a duration such as `30m`, or `-1` to keep it loaded indefinitely. Longer values avoid re-loading the model between questions at the cost of holding memory."
         },
         "repo-intelligence.ollama.url": {
           "type": "string",

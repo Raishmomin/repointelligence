@@ -8,6 +8,7 @@ import {
   optionalNumber,
   optionalString,
   requireString,
+  ToolArgumentError,
   ToolContext,
   ToolOutcome,
 } from './types';
@@ -15,6 +16,87 @@ import {
 const DEFAULT_READ_LIMIT = 2000;
 const MAX_GLOB_RESULTS = 200;
 const MAX_GREP_RESULTS = 100;
+
+/**
+ * Generated directories that searches must not return.
+ *
+ * Deliberately separate from `agent.ignorePatterns`, which is an access-control list
+ * enforced by the path guard — `.env` is a secret the agent must never open, whereas
+ * `.next` is merely noise. Compiled output mirrors the real source closely enough that a
+ * search for a component returns its build artefacts alongside (or instead of) the file
+ * the user can actually edit, and on a framework that emits per-route bundles those
+ * artefacts can crowd out every genuine hit before the result cap is reached.
+ *
+ * Excluding them here rather than in `ignorePatterns` keeps `read_file` able to open a
+ * build artefact when someone explicitly asks about one.
+ */
+const SEARCH_NOISE_DIRS = [
+  'node_modules',
+  '.git',
+  'out',
+  'dist',
+  'build',
+  '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.astro',
+  '.turbo',
+  '.cache',
+  '.parcel-cache',
+  'coverage',
+  '.venv',
+  '__pycache__',
+  'target',
+  'vendor',
+];
+
+/**
+ * Builds the exclude pattern for findFiles.
+ *
+ * Empty entries are dropped: a brace expansion with an empty alternative
+ * (`**\/{,out,dist}/**`) is not a pattern that reliably matches nothing, and
+ * `ignorePatterns` is user-editable, so a stray empty string in settings should not be
+ * able to change what the agent can see.
+ */
+/**
+ * Rewrites a glob so its literal letters match either case.
+ *
+ * `vscode.workspace.findFiles` matches paths case-sensitively on a case-sensitive
+ * filesystem, so on Linux `**​/*footer*` does not find `components/layout/Footer.tsx`
+ * while on macOS it does. The agent then reports the file as missing on one machine and
+ * finds it on another, which reads as the model being unreliable rather than the search
+ * being wrong.
+ *
+ * Brace expansion of each letter (`f` becomes `[Ff]`) is the portable fix — findFiles
+ * exposes no case-insensitivity flag. Characters already inside a class are left alone so
+ * a hand-written `[A-Z]` keeps its meaning, and every glob metacharacter passes through
+ * untouched.
+ */
+export function caseInsensitiveGlob(pattern: string): string {
+  let out = '';
+  let inClass = false;
+
+  for (const char of pattern) {
+    if (char === '[') inClass = true;
+    else if (char === ']') inClass = false;
+
+    if (!inClass && /[a-zA-Z]/.test(char)) {
+      out += `[${char.toLowerCase()}${char.toUpperCase()}]`;
+    } else {
+      out += char;
+    }
+  }
+
+  return out;
+}
+
+export function buildExcludeGlob(ignorePatterns: readonly string[]): string {
+  const segments = [...new Set([...SEARCH_NOISE_DIRS, ...ignorePatterns])]
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== '');
+
+  return `**/{${segments.join(',')}}/**`;
+}
 
 /**
  * Read-only tools. All are `auto` approval: the agent runs them freely so it can explore
@@ -26,7 +108,10 @@ export const readFileTool: AgentTool<{ path: string; offset?: number; limit?: nu
   description:
     'Read a file from the workspace, returned with line numbers. Call this whenever you ' +
     'need to see a file you have not already read in this run — you must read a file ' +
-    'before you can edit it. Use offset and limit to page through very large files.',
+    'before you can edit it. Use offset and limit to page through very large files. ' +
+    'Requires a path you already know: if you are still looking for the file, call glob ' +
+    'or grep on its own first and read the result on your next turn. Do not call this in ' +
+    'the same turn as the search that finds the path — you will not have the path yet.',
   approval: 'auto',
   inputSchema: {
     type: 'object',
@@ -40,6 +125,15 @@ export const readFileTool: AgentTool<{ path: string; offset?: number; limit?: nu
   },
   parseArgs(raw) {
     const args = asRecord(raw, 'read_file');
+    // A missing path here is almost always a model that queued read_file in the same turn
+    // as the glob or grep meant to produce that path, so it had nothing to fill in. The
+    // generic "must be a non-empty string" is true but leaves it to guess the remedy.
+    if (args.path === undefined || args.path === null || args.path === '') {
+      throw new ToolArgumentError(
+        'No "path" was given. If you do not know the path yet, call glob or grep first ' +
+          'and read the file on your next turn, once you can see the result.',
+      );
+    }
     return {
       path: requireString(args, 'path'),
       offset: optionalNumber(args, 'offset'),
@@ -109,8 +203,8 @@ export const globTool: AgentTool<{ pattern: string; path?: string }> = {
   async execute(args, context): Promise<ToolOutcome> {
     const scoped = args.path ? `${args.path.replace(/\/$/, '')}/${args.pattern}` : args.pattern;
     const found = await vscode.workspace.findFiles(
-      new vscode.RelativePattern(context.workspace, scoped),
-      `**/{${context.ignorePatterns.join(',')},out,dist,build}/**`,
+      new vscode.RelativePattern(context.workspace, caseInsensitiveGlob(scoped)),
+      buildExcludeGlob(context.ignorePatterns),
       MAX_GLOB_RESULTS,
     );
 
@@ -164,8 +258,8 @@ export const grepTool: AgentTool<{ pattern: string; glob?: string; path?: string
     const filter = args.glob ?? '**/*';
     const scoped = args.path ? `${args.path.replace(/\/$/, '')}/${filter}` : filter;
     const files = await vscode.workspace.findFiles(
-      new vscode.RelativePattern(context.workspace, scoped),
-      `**/{${context.ignorePatterns.join(',')},out,dist,build}/**`,
+      new vscode.RelativePattern(context.workspace, caseInsensitiveGlob(scoped)),
+      buildExcludeGlob(context.ignorePatterns),
       1000,
     );
 
