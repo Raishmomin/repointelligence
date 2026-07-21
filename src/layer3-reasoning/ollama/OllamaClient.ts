@@ -5,7 +5,7 @@ import * as https from 'https';
 import { Readable } from 'stream';
 import { Logger } from '../../shared/Logger';
 import { OllamaHealthStatus, ModelInfo } from '../../shared/types/ollama.types';
-import { ModelClient, ModelClientOptions } from '../../shared/types/agent.types';
+import { ModelClient, ModelClientOptions, ModelCompletion } from '../../shared/types/agent.types';
 import { rankModels } from '../providers/ollamaModels';
 
 function customFetch(url: string, options: any = {}): Promise<any> {
@@ -300,7 +300,7 @@ export class OllamaClient implements ModelClient {
   async chatComplete(
     messages: { role: string; content: string }[],
     options: ModelClientOptions,
-  ): Promise<string> {
+  ): Promise<ModelCompletion> {
     const model = await this.resolveChatModel();
     const response = await this.client.chat({
       model,
@@ -310,6 +310,13 @@ export class OllamaClient implements ModelClient {
       keep_alive: options.keepAlive,
       options: { num_ctx: options.numCtx, num_predict: options.maxTokens },
     });
-    return response.message.content;
+
+    return {
+      content: response.message.content,
+      // Ollama does report token counts; they were simply being discarded with the rest
+      // of the envelope, which left the UI showing every local run as 0 in / 0 out.
+      inputTokens: response.prompt_eval_count ?? 0,
+      outputTokens: response.eval_count ?? 0,
+    };
   }
 }

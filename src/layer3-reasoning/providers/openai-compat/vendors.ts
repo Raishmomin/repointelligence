@@ -40,6 +40,15 @@ export interface VendorConfig {
   supportsParallelToolCalls?: boolean;
 
   /**
+   * Whether `stream_options: { include_usage: true }` is accepted.
+   *
+   * A streamed response carries no token counts unless this is asked for, so without it
+   * the agent reports every run as 0 in / 0 out. Opt-out rather than opt-in: the field is
+   * part of the OpenAI spec, and a vendor that rejects it is the exception.
+   */
+  supportsStreamUsage?: boolean;
+
+  /**
    * Gemini accepts only a narrow JSON-Schema subset; sending our full tool schema is a 400.
    */
   sanitizeToolSchema?: boolean;

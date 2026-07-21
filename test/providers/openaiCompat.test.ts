@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapFinishReason,
+  OpenAICompatProvider,
   toOpenAIMessages,
   toOpenAITools,
 } from '../../src/layer3-reasoning/providers/openai-compat/OpenAICompatProvider';
@@ -288,5 +289,89 @@ describe('model filters', () => {
     expect(openrouter.filterModels!({ id: 'a', supported_parameters: ['tools'] })).toBe(true);
     expect(openrouter.filterModels!({ id: 'b', supported_parameters: ['temperature'] })).toBe(false);
     expect(openrouter.filterModels!({ id: 'c' })).toBe(false);
+  });
+});
+
+describe('stream_options', () => {
+  const CONFIG = {
+    get: () => undefined,
+    getString: (_id: string, fallback = '') => fallback,
+    getNumber: (_id: string, fallback: number) => fallback,
+    getSecret: async () => 'test-key',
+  };
+
+  const LOGGER = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+  /** An SSE stream carrying one usage frame, which is what include_usage buys. */
+  function sseResponse(body: string, status = 200): Response {
+    return new Response(status === 200 ? body : '{"error":{"message":"x"}}', {
+      status,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+
+  const DONE =
+    'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n' +
+    'data: {"usage":{"prompt_tokens":11,"completion_tokens":22},"choices":[]}\n\n' +
+    'data: [DONE]\n\n';
+
+  function turnRequest() {
+    return {
+      system: 'sys',
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      tools: [],
+      maxTokens: 100,
+      token: { isCancellationRequested: false },
+      onEvent: () => {},
+    };
+  }
+
+  async function bodiesFor(vendorId: string, responses: Response[]) {
+    const sent: Record<string, unknown>[] = [];
+    const original = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)));
+      return responses[Math.min(call++, responses.length - 1)];
+    }) as typeof fetch;
+
+    try {
+      const provider = new OpenAICompatProvider(vendorById(vendorId)!, CONFIG as never, LOGGER as never);
+      await provider.streamTurn(turnRequest() as never).catch(() => undefined);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    return sent;
+  }
+
+  it('asks for usage, without which a streamed response reports no tokens at all', async () => {
+    // The observed symptom was every Gemini run showing "0 in, 0 out": the provider read
+    // chunk.usage but never requested it, so no usage frame was ever sent.
+    const [body] = await bodiesFor('openai', [sseResponse(DONE)]);
+
+    expect(body.stream_options).toEqual({ include_usage: true });
+  });
+
+  it('retries without the field when an endpoint rejects it', async () => {
+    // Gemini already rejects parallel_tool_calls outright rather than ignoring it, so an
+    // endpoint refusing stream_options is a real possibility. Losing token counts is an
+    // acceptable outcome; losing the provider is not.
+    const rejection = new Response('{"error":{"message":"Unknown name \\"stream_options\\""}}', {
+      status: 400,
+    });
+    const bodies = await bodiesFor('gemini', [rejection, sseResponse(DONE)]);
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].stream_options).toEqual({ include_usage: true });
+    expect(bodies[1].stream_options).toBeUndefined();
+  });
+
+  it('does not retry a 400 that is about something else', async () => {
+    const unrelated = new Response('{"error":{"message":"context length exceeded"}}', { status: 400 });
+    const bodies = await bodiesFor('openai', [unrelated]);
+
+    expect(bodies).toHaveLength(1);
   });
 });

@@ -3,6 +3,7 @@ import { Logger } from '../../shared/Logger';
 import { OllamaClient } from '../ollama/OllamaClient';
 import { describeToolsForPrompt, parseOllamaEnvelope } from './ollamaEnvelope';
 import { assessModel } from './ollamaModels';
+import { ModelCompletion } from '../../shared/types/agent.types';
 import {
   LlmContentBlock,
   LlmMessage,
@@ -100,9 +101,9 @@ export class OllamaProvider implements LlmProvider {
     const system = request.system + describeToolsForPrompt(request.tools);
     const messages = [{ role: 'system', content: system }, ...flattenMessages(request.messages)];
 
-    let raw: string;
+    let completion: ModelCompletion;
     try {
-      raw = await this.client.chatComplete(messages, {
+      completion = await this.client.chatComplete(messages, {
         // Sourced from the same getter the agent's TranscriptManager budgets against, so
         // the window Ollama enforces and the window we pack for are always one number.
         numCtx: this.contextWindow,
@@ -122,6 +123,7 @@ export class OllamaProvider implements LlmProvider {
       return { content: [], stopReason: 'cancelled', usage: { inputTokens: 0, outputTokens: 0 } };
     }
 
+    const raw = completion.content;
     const { blocks, hasToolCalls } = parseOllamaEnvelope(raw, allowedTools);
     if (!hasToolCalls && raw.includes('"toolCalls"')) {
       // The model tried to call a tool and produced something unusable. Worth surfacing:
@@ -136,9 +138,7 @@ export class OllamaProvider implements LlmProvider {
     return {
       content: blocks,
       stopReason: hasToolCalls ? 'tool_use' : 'end_turn',
-      // The Ollama client does not surface token counts; the loop treats 0 as "unknown"
-      // and falls back to its own character-based estimate for compaction.
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: { inputTokens: completion.inputTokens, outputTokens: completion.outputTokens },
       raw: { role: 'assistant', content: blocks },
     };
   }

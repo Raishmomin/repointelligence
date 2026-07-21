@@ -75,6 +75,20 @@ export function Timeline({
   );
 }
 
+/**
+ * Renders the token tail of a run footer, or nothing when there is nothing to report.
+ *
+ * Ollama reported no counts at all until recently, and an OpenAI-compatible endpoint
+ * still reports none if it rejects `stream_options` — so zero has to mean "unknown"
+ * rather than "free".
+ */
+function usageLabel(usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number }): string {
+  if (!usage.inputTokens && !usage.outputTokens) return '';
+
+  const cached = usage.cacheReadTokens ? `, ${usage.cacheReadTokens} cached` : '';
+  return ` \u00b7 ${usage.inputTokens} in, ${usage.outputTokens} out${cached}`;
+}
+
 function RunPanel({ entry }: { entry: TimelineEntry }) {
   const turn = [...entry.steps].reverse().find((step) => step.kind === 'turn');
   const finished = entry.steps.find((step) => step.kind === 'finished');
@@ -96,9 +110,10 @@ function RunPanel({ entry }: { entry: TimelineEntry }) {
       </div>
       {finished?.kind === 'finished' && (
         <div className="run-footer">
-          {finished.status} after {finished.turns} turn{finished.turns === 1 ? '' : 's'} ·{' '}
-          {finished.usage.inputTokens} in, {finished.usage.outputTokens} out
-          {finished.usage.cacheReadTokens ? `, ${finished.usage.cacheReadTokens} cached` : ''}
+          {finished.status} after {finished.turns} turn{finished.turns === 1 ? '' : 's'}
+          {/* Zero means the backend reported nothing, not that the run was free. Printing
+              "0 in, 0 out" invites the reader to believe a number that was never measured. */}
+          {usageLabel(finished.usage)}
         </div>
       )}
     </div>

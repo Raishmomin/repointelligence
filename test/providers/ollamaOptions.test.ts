@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { __resetConfig, __setConfig } from '../mocks/vscode';
 import { OllamaProvider } from '../../src/layer3-reasoning/providers/OllamaProvider';
-import { ModelClientOptions } from '../../src/shared/types/agent.types';
+import { ModelClientOptions, ModelCompletion } from '../../src/shared/types/agent.types';
 import { LlmTurnRequest } from '../../src/layer3-reasoning/providers/types';
 
 /**
@@ -15,14 +15,17 @@ import { LlmTurnRequest } from '../../src/layer3-reasoning/providers/types';
 class RecordingClient {
   lastOptions: ModelClientOptions | undefined;
 
-  constructor(private readonly reply = '{"response":"ok"}') {}
+  constructor(
+    private readonly reply = '{"response":"ok"}',
+    private readonly usage = { inputTokens: 0, outputTokens: 0 },
+  ) {}
 
   async chatComplete(
     _messages: { role: string; content: string }[],
     options: ModelClientOptions,
-  ): Promise<string> {
+  ): Promise<ModelCompletion> {
     this.lastOptions = options;
-    return this.reply;
+    return { content: this.reply, ...this.usage };
   }
 }
 
@@ -82,5 +85,32 @@ describe('OllamaProvider runtime options', () => {
   it('caps generation at the turn budget', async () => {
     const options = await optionsFor(request({ maxTokens: 4_000 }));
     expect(options.maxTokens).toBe(4_000);
+  });
+});
+
+describe('OllamaProvider usage reporting', () => {
+  beforeEach(() => {
+    __resetConfig();
+  });
+
+  it('reports the token counts Ollama returned', async () => {
+    // These were previously hardcoded to zero, so every local run rendered as
+    // "0 in, 0 out" in the timeline regardless of how much context it actually read.
+    const client = new RecordingClient('{"response":"ok"}', { inputTokens: 1234, outputTokens: 56 });
+    const provider = new OllamaProvider(client as never);
+
+    const result = await provider.streamTurn(request());
+
+    expect(result.usage.inputTokens).toBe(1234);
+    expect(result.usage.outputTokens).toBe(56);
+  });
+
+  it('treats a backend that reports nothing as zero rather than failing', async () => {
+    const client = new RecordingClient('{"response":"ok"}', { inputTokens: 0, outputTokens: 0 });
+    const provider = new OllamaProvider(client as never);
+
+    const result = await provider.streamTurn(request());
+
+    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
   });
 });

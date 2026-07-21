@@ -16,4 +16,6 @@ export interface ApprovalDecision { id: string; subjectType: 'change_set' | 'com
 export interface ValidationResult { commandId: string; exitCode: number | null; output: string; durationMs: number; }
 export interface AgentRun { id: string; task: AgentTask; status: AgentRunStatus; response?: string; createdAt: number; updatedAt: number; }
 export interface ModelClientOptions { numCtx: number; maxTokens: number; keepAlive: string; }
-export interface ModelClient { chatComplete(messages: Array<{ role: string; content: string }>, options: ModelClientOptions): Promise<string>; }
+/** A completion plus the token counts the backend reported for it. Zero means unknown. */
+export interface ModelCompletion { content: string; inputTokens: number; outputTokens: number; }
+export interface ModelClient { chatComplete(messages: Array<{ role: string; content: string }>, options: ModelClientOptions): Promise<ModelCompletion>; }

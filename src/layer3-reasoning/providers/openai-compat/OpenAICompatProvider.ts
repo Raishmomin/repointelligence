@@ -32,6 +32,12 @@ interface StreamChunk {
 export class OpenAICompatProvider implements LlmProvider {
   readonly supportsNativeTools = true;
 
+  /**
+   * Set once an endpoint has rejected `stream_options`, so the retry is paid at most once
+   * per session rather than on every turn of a 30-turn run.
+   */
+  private streamUsageRejected = false;
+
   constructor(
     private readonly vendor: VendorConfig,
     private readonly config: ProviderConfigContext,
@@ -125,17 +131,39 @@ export class OpenAICompatProvider implements LlmProvider {
       [this.vendor.maxTokensField?.(model) ?? 'max_tokens']: request.maxTokens,
     };
 
+    // Without this a streamed response carries no usage chunk at all, and every run
+    // reports 0 in / 0 out — which reads as "this provider is free" rather than "nobody
+    // asked for the numbers".
+    if (this.vendor.supportsStreamUsage !== false && !this.streamUsageRejected) {
+      body.stream_options = { include_usage: true };
+    }
+
     if (request.tools.length) {
       body.tools = toOpenAITools(request.tools, this.vendor);
       // Gemini rejects this field outright rather than ignoring it.
       if (this.vendor.supportsParallelToolCalls !== false) body.parallel_tool_calls = true;
     }
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+    let response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: await this.headers(),
       body: JSON.stringify(body),
     });
+
+    // Some OpenAI-compatible endpoints reject unknown fields outright rather than
+    // ignoring them — Gemini already does exactly that with `parallel_tool_calls`. Losing
+    // token counts is a far better outcome than losing the provider, so a rejection here
+    // retries once without the field and stops asking for the rest of the session.
+    if (!response.ok && (await mentionsStreamOptions(response))) {
+      this.logger.info(`${this.vendor.label} rejected stream_options; continuing without token counts.`);
+      this.streamUsageRejected = true;
+      delete body.stream_options;
+      response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: await this.headers(),
+        body: JSON.stringify(body),
+      });
+    }
 
     if (!response.ok || !response.body) {
       throw new Error(await describeFailure(response, this.vendor));
@@ -310,6 +338,18 @@ export function toOpenAITools(
         parameters: vendor.sanitizeToolSchema ? sanitizeSchema(tool.inputSchema) : tool.inputSchema,
       },
     }));
+}
+
+/**
+ * Whether a failed response is blaming `stream_options`.
+ *
+ * Reads a clone so the original body stays unconsumed for `describeFailure`, which needs
+ * it if this turns out not to be the cause.
+ */
+async function mentionsStreamOptions(response: Response): Promise<boolean> {
+  if (response.status !== 400) return false;
+  const body = await response.clone().text().catch(() => '');
+  return /stream_options|include_usage/i.test(body);
 }
 
 async function describeFailure(response: Response, vendor: VendorConfig): Promise<string> {
