@@ -135,16 +135,35 @@ function Step({ step }: { step: AgentStreamStep }) {
           <div>{step.text}</div>
         </details>
       );
-    case 'tool':
-      return (
-        <div className={`step step-tool step-tool-${step.status}`}>
-          <span className="step-tool-icon">
-            {step.status === 'running' ? '○' : step.status === 'ok' ? '✓' : '✗'}
-          </span>
+    case 'tool': {
+      const icon = step.status === 'running' ? '○' : step.status === 'ok' ? '✓' : '✗';
+      const summary = (
+        <>
+          <span className="step-tool-icon">{icon}</span>
           <span className="step-tool-name">{step.name}</span>
-          {step.preview && <span className="step-tool-preview">{step.preview}</span>}
-        </div>
+          {step.args && <span className="step-tool-args">{step.args}</span>}
+        </>
       );
+
+      // Only worth expanding when there is something underneath. A call still running, or
+      // one whose result was empty, stays a plain row so it cannot be clicked to nothing —
+      // and falls back to the one-line preview, which is all there is to show.
+      if (!step.output) {
+        return (
+          <div className={`step step-tool step-tool-${step.status}`}>
+            {summary}
+            {step.preview && <span className="step-tool-preview">{step.preview}</span>}
+          </div>
+        );
+      }
+
+      return (
+        <details className={`step step-tool step-tool-${step.status}`}>
+          <summary>{summary}</summary>
+          <pre className="step-tool-output">{step.output}</pre>
+        </details>
+      );
+    }
     case 'approval': {
       const count = step.changeSetIds.length + step.commandIds.length;
       return (

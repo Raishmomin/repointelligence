@@ -145,6 +145,39 @@ body {
   font-size: 11px;
 }
 
+/* A tool row is a <details> once it has output to expand. The flex layout has to move to
+   the summary in that case: applying it to the <details> itself puts the disclosure
+   triangle and the expanded body on the same line. */
+details.step-tool {
+  display: block;
+}
+
+.step-tool summary {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.step-tool-args {
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-tool-output {
+  margin: 4px 0 0 16px;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+  border-radius: 3px;
+  color: var(--vscode-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .step-tool-running {
   color: var(--vscode-descriptionForeground);
 }

@@ -86,6 +86,49 @@ describe('appReducer', () => {
     });
   });
 
+  describe('tool rows', () => {
+    it('keeps the arguments when the result arrives without them', () => {
+      // args are known when a call starts, output only when it ends. Replacing the row
+      // instead of merging would drop whichever half arrived first.
+      let state = stream('r1', [
+        { kind: 'tool', toolCallId: 't1', name: 'glob', status: 'running', args: 'pattern: **/*footer*' },
+      ]);
+      state = stream(
+        'r1',
+        [{ kind: 'tool', toolCallId: 't1', name: 'glob', status: 'ok', output: 'Footer.tsx' }],
+        state,
+      );
+
+      expect(state.timeline[0].steps).toHaveLength(1);
+      expect(state.timeline[0].steps[0]).toMatchObject({
+        status: 'ok',
+        args: 'pattern: **/*footer*',
+        output: 'Footer.tsx',
+      });
+    });
+
+    it('shows one row when a call starts and finishes in the same batch', () => {
+      // Both land in one 50ms flush for a fast tool, and the first batch for a run used to
+      // be taken verbatim without deduping.
+      const state = stream('r1', [
+        { kind: 'tool', toolCallId: 't1', name: 'glob', status: 'running', args: 'pattern: x' },
+        { kind: 'tool', toolCallId: 't1', name: 'glob', status: 'ok', output: 'none' },
+      ]);
+
+      expect(state.timeline[0].steps).toHaveLength(1);
+      expect(state.timeline[0].steps[0]).toMatchObject({ status: 'ok', args: 'pattern: x' });
+    });
+
+    it('keeps separate calls to the same tool apart', () => {
+      const state = stream('r1', [
+        { kind: 'tool', toolCallId: 't1', name: 'read_file', status: 'ok', args: 'path: a.ts' },
+        { kind: 'tool', toolCallId: 't2', name: 'read_file', status: 'ok', args: 'path: b.ts' },
+      ]);
+
+      expect(state.timeline[0].steps).toHaveLength(2);
+    });
+  });
+
   describe('sessions', () => {
     const CHATS = [
       { id: 's1', title: 'modify footer design', createdAt: 1, updatedAt: 20 },

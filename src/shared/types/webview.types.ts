@@ -25,7 +25,18 @@ export type AgentStreamStep =
       toolCallId: string;
       name: string;
       status: 'running' | 'ok' | 'error';
+      /** One-line summary, shown collapsed. */
       preview?: string;
+      /** The call's arguments, as a already-formatted single line. */
+      args?: string;
+      /**
+       * A longer excerpt of the tool's output, shown when the row is expanded.
+       *
+       * Capped well below the full result: the transcript the model sees can run to
+       * thousands of lines, and the panel only needs enough to answer "did that search
+       * find the right thing".
+       */
+      output?: string;
     }
   | { kind: 'approval'; changeSetIds: string[]; commandIds: string[] }
   | {

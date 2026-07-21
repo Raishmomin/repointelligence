@@ -137,10 +137,10 @@ function appendSteps(
   steps: AgentStreamStep[],
 ): TimelineEntry[] {
   const index = timeline.findIndex((entry) => entry.runId === runId);
-  if (index === -1) return [...timeline, { runId, steps }];
-
-  const existing = timeline[index];
-  const merged = [...existing.steps];
+  // A run's first batch goes through the same merge rather than being taken verbatim:
+  // a tool that starts and finishes inside one 50ms flush arrives as two steps sharing an
+  // id, which would otherwise render as two rows for one call.
+  const merged = index === -1 ? [] : [...timeline[index].steps];
 
   for (const step of steps) {
     const last = merged[merged.length - 1];
@@ -151,12 +151,19 @@ function appendSteps(
       const toolIndex = merged.findIndex(
         (candidate) => candidate.kind === 'tool' && candidate.toolCallId === step.toolCallId,
       );
-      if (toolIndex === -1) merged.push(step);
-      else merged[toolIndex] = step;
+      if (toolIndex === -1) {
+        merged.push(step);
+      } else {
+        // Merged rather than replaced. The arguments are known when the call starts and
+        // the output only when it ends, so overwriting would drop whichever arrived first.
+        merged[toolIndex] = { ...merged[toolIndex], ...step };
+      }
     } else {
       merged.push(step);
     }
   }
+
+  if (index === -1) return [...timeline, { runId, steps: merged }];
 
   const next = [...timeline];
   next[index] = { runId, steps: merged };

@@ -382,6 +382,18 @@ export class AgentService {
     };
 
     for (const call of toolUses) {
+      // Re-announced here with its arguments. The provider emits toolCallStarted while the
+      // arguments are still streaming, so that event cannot carry them; this is the first
+      // point where the input is complete, and a long-running command should show what it
+      // is running rather than just its name. The UI keys tool rows by id, so this updates
+      // the existing row rather than adding one.
+      this.events.emit('agent:toolCallStarted', {
+        runId: state.run.id,
+        toolCallId: call.id,
+        name: call.name,
+        args: formatToolArgs(call.input),
+      });
+
       const outcome = await this.registry.execute(call.name, call.input, context, mode);
 
       // Counted on attempt rather than on success: a search that returned nothing still
@@ -396,6 +408,7 @@ export class AgentService {
           name: call.name,
           ok: !outcome.isError,
           preview: preview(outcome.content),
+          output: outputExcerpt(outcome.content),
         });
         continue;
       }
@@ -559,6 +572,7 @@ export class AgentService {
       name: awaited.name,
       ok: !outcome.isError,
       preview: preview(outcome.content),
+      output: outputExcerpt(outcome.content),
     });
 
     if (Object.keys(state.pending.awaiting).length > 0) {
@@ -763,6 +777,39 @@ function textOf(content: LlmContentBlock[]): string {
 function preview(content: string, limit = 200): string {
   const collapsed = content.replace(/\s+/g, ' ').trim();
   return collapsed.length > limit ? `${collapsed.slice(0, limit)}…` : collapsed;
+}
+
+/**
+ * The excerpt of a tool result shown when its row is expanded in the panel.
+ *
+ * Far shorter than what the model receives — a read_file can be 2000 lines — because the
+ * panel only has to answer "did that do what I expected", and every byte here crosses
+ * postMessage and is retained for replay.
+ */
+function outputExcerpt(content: string, limit = 2000): string {
+  return content.length > limit
+    ? `${content.slice(0, limit)}\n…[${content.length - limit} more characters]`
+    : content;
+}
+
+/**
+ * Renders a tool call's arguments as one readable line.
+ *
+ * Values are elided individually rather than truncating the whole string, so a call whose
+ * first argument is a large file body still shows the arguments that follow it.
+ */
+function formatToolArgs(input: unknown, valueLimit = 80): string {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
+
+  return Object.entries(input as Record<string, unknown>)
+    .map(([key, value]) => {
+      const rendered = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+      const collapsed = rendered.replace(/\s+/g, ' ').trim();
+      const elided =
+        collapsed.length > valueLimit ? `${collapsed.slice(0, valueLimit)}…` : collapsed;
+      return `${key}: ${elided}`;
+    })
+    .join('  ');
 }
 
 function truncate(output: string, limit = 8000): string {

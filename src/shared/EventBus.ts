@@ -49,14 +49,17 @@ export interface EventMap {
   'agent:turnStarted': { runId: string; turn: number; maxTurns: number };
   'agent:textDelta': { runId: string; text: string };
   'agent:thinkingDelta': { runId: string; text: string };
-  'agent:toolCallStarted': { runId: string; toolCallId: string; name: string };
+  'agent:toolCallStarted': { runId: string; toolCallId: string; name: string; args?: string };
   'agent:toolCallInput': { runId: string; toolCallId: string; partialJson: string };
   'agent:toolCallResult': {
     runId: string;
     toolCallId: string;
     name: string;
     ok: boolean;
+    /** One line, for the collapsed row. */
     preview: string;
+    /** A longer excerpt, for the expanded row. */
+    output: string;
   };
   'agent:approvalRequired': {
     runId: string;

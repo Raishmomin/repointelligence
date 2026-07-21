@@ -44,16 +44,17 @@ export class AgentStreamBridge {
       events.on('agent:thinkingDelta', ({ runId, text }) =>
         this.enqueue(runId, { kind: 'thinking', text }),
       ),
-      events.on('agent:toolCallStarted', ({ runId, toolCallId, name }) =>
-        this.enqueue(runId, { kind: 'tool', toolCallId, name, status: 'running' }),
+      events.on('agent:toolCallStarted', ({ runId, toolCallId, name, args }) =>
+        this.enqueue(runId, { kind: 'tool', toolCallId, name, status: 'running', args }),
       ),
-      events.on('agent:toolCallResult', ({ runId, toolCallId, name, ok, preview }) =>
+      events.on('agent:toolCallResult', ({ runId, toolCallId, name, ok, preview, output }) =>
         this.enqueue(runId, {
           kind: 'tool',
           toolCallId,
           name,
           status: ok ? 'ok' : 'error',
           preview,
+          output,
         }),
       ),
       events.on('agent:approvalRequired', ({ runId, changeSetIds, commandIds }) =>

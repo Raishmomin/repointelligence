@@ -85,6 +85,7 @@ describe('AgentStreamBridge', () => {
         name: 'read_file',
         ok: true,
         preview: '1\texport const a = 1;',
+        output: '1\texport const a = 1;',
       });
       flush();
       expect(posted[1].steps[0]).toMatchObject({ status: 'ok', preview: '1\texport const a = 1;' });
@@ -97,6 +98,7 @@ describe('AgentStreamBridge', () => {
         name: 'str_replace',
         ok: false,
         preview: 'old_string matches 3 places',
+        output: 'old_string matches 3 places',
       });
       flush();
       expect(posted[0].steps[0]).toMatchObject({ status: 'error' });
@@ -172,6 +174,36 @@ describe('AgentStreamBridge', () => {
       events.emit('agent:textDelta', { runId: 'run-1', text: 'ignored' });
       flush();
       expect(posted).toHaveLength(0);
+    });
+  });
+  describe('tool arguments and output', () => {
+    it('carries the arguments a call was made with', () => {
+      // The row shows what a tool actually did, not just that something named glob ran.
+      events.emit('agent:toolCallStarted', {
+        runId: 'run-1',
+        toolCallId: 't1',
+        name: 'glob',
+        args: 'pattern: **/*footer*',
+      });
+      flush();
+
+      expect(posted[0].steps[0]).toMatchObject({ args: 'pattern: **/*footer*' });
+    });
+
+    it('carries a longer output than the one-line preview', () => {
+      events.emit('agent:toolCallResult', {
+        runId: 'run-1',
+        toolCallId: 't1',
+        name: 'glob',
+        ok: true,
+        preview: 'components/layout/Footer.tsx',
+        output: 'components/layout/Footer.tsx\ncomponents/layout/FooterNav.tsx',
+      });
+      flush();
+
+      expect(posted[0].steps[0]).toMatchObject({
+        output: 'components/layout/Footer.tsx\ncomponents/layout/FooterNav.tsx',
+      });
     });
   });
 });
