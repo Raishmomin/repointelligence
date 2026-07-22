@@ -73,7 +73,42 @@ This is the part worth understanding before you trust the agent with a repositor
 
 ---
 
+## Installation
+
+### From a release (recommended)
+
+1. Download `repo-intelligence-<version>.vsix` from the [latest release](https://github.com/Raishmomin/repointelligence/releases).
+2. In VS Code, open the Extensions panel (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>), click the **⋯** menu in its top-right corner, and choose **Install from VSIX…**, then pick the downloaded file.
+
+   Or from a terminal:
+
+   ```bash
+   code --install-extension repo-intelligence-0.1.0.vsix
+   ```
+
+3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
+
+### You also need a model
+
+The extension is the agent; the model is yours to bring. Either works:
+
+- **Local, free, offline** — install [Ollama](https://ollama.com), then:
+
+  ```bash
+  ollama pull qwen2.5-coder:7b
+  ```
+
+- **Cloud** — an API key for any supported provider (Claude, OpenAI, Gemini, OpenRouter, Groq, Nvidia NIM), entered in the extension's provider panel. See [Getting started](#getting-started) for the setup flow.
+
+### First run
+
+1. Open a workspace folder.
+2. Run **`Repo Intelligence: Scan Repository`** from the command palette to index it.
+3. Open the Repo Intelligence panel and ask something — *"where is the footer component?"* is a good first test.
+
 ## Getting started
+
+To build from source instead:
 
 ```bash
 npm install
