@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEARCH_FIRST_NUDGE, shouldNudgeToSearch } from '../../src/layer3-reasoning/agent/AgentService';
+import { responseForTextOnlyFinish, SEARCH_FIRST_NUDGE, shouldNudgeToSearch } from '../../src/layer3-reasoning/agent/AgentService';
 
 /**
  * The reported failure: the agent replied "please provide me with the path of footer.ts"
@@ -43,5 +43,45 @@ describe('search-first nudge', () => {
       // Otherwise the agent is cornered into inventing a search that never happened.
       expect(SEARCH_FIRST_NUDGE).toMatch(/what you searched for/i);
     });
+  });
+});
+
+describe('responseForTextOnlyFinish', () => {
+  it('prefers the pre-nudge reply when the model merely acquiesces', () => {
+    // The reported symptom: "hello" produced "Hello! How can I help you today?", the
+    // nudge fired, and the recorded reply became "I understand. I will use the available
+    // tools…" — the model answering the correction instead of the user.
+    const response = responseForTextOnlyFinish(
+      { turn: 2, nudgedAtTurn: 1, preNudgeText: 'Hello! How can I help you today?' },
+      'I understand. I will use the available tools to search the repository.',
+    );
+
+    expect(response).toBe('Hello! How can I help you today?');
+  });
+
+  it('keeps the latest text when the nudge actually provoked a search', () => {
+    // Turns advanced past nudge+1, so tools ran in between and the final text is a real
+    // answer grounded in what they returned.
+    const response = responseForTextOnlyFinish(
+      { turn: 5, nudgedAtTurn: 1, preNudgeText: 'Hello!' },
+      'Footer.tsx is at components/layout/Footer.tsx.',
+    );
+
+    expect(response).toBe('Footer.tsx is at components/layout/Footer.tsx.');
+  });
+
+  it('keeps the latest text when no nudge ever fired', () => {
+    const response = responseForTextOnlyFinish({ turn: 3 }, 'Done — three files changed.');
+    expect(response).toBe('Done — three files changed.');
+  });
+
+  it('falls back to the acquiescence when the pre-nudge turn had no text at all', () => {
+    // Better a boilerplate reply than an empty one.
+    const response = responseForTextOnlyFinish(
+      { turn: 2, nudgedAtTurn: 1, preNudgeText: '' },
+      'I understand. I will search.',
+    );
+
+    expect(response).toBe('I understand. I will search.');
   });
 });

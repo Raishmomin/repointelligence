@@ -21,6 +21,7 @@ import {
   ProviderId,
 } from '../providers/types';
 import { gitServiceFor } from '../../layer1-intelligence/git/GitService';
+import { estimateTokens } from '../../shared/utils/tokenCounter';
 import { FileStateTracker } from './FileStateTracker';
 import { buildSystemPrompt } from './systemPrompt';
 import { ToolRegistry } from './ToolRegistry';
@@ -52,6 +53,17 @@ interface RunState {
   discoveryToolsUsed: number;
   /** Whether the search-first correction has already been spent. */
   nudgedToSearch: boolean;
+  /**
+   * The reply the model gave before being nudged to search.
+   *
+   * If the nudge produces another tool-free turn, the model has merely acquiesced in
+   * prose — "I understand. I will use the available tools…" — and that acknowledgement is
+   * not an answer to the user. The pre-nudge text was the natural reply, so it is what
+   * the run finishes with in that case.
+   */
+  preNudgeText?: string;
+  /** Turn on which the nudge was injected, to recognise the turn straight after it. */
+  nudgedAtTurn?: number;
   /** Which provider served this run, so a resume on a different one can be refused. */
   providerId: ProviderId;
 }
@@ -71,6 +83,63 @@ export function shouldNudgeToSearch(state: {
   nudgedToSearch: boolean;
 }): boolean {
   return state.discoveryToolsUsed === 0 && !state.nudgedToSearch;
+}
+
+/**
+ * What a run that is ending on a text-only turn should report as its reply.
+ *
+ * A tool-free turn immediately after the search-first nudge is the model acquiescing, not
+ * answering — "I understand. I will use the available tools…" is a reply to the
+ * correction, not to the user. The text it gave before being corrected was the natural
+ * answer, so that is preferred. Any turn in between — a search the nudge successfully
+ * provoked — makes the latest text a real answer again.
+ */
+export function responseForTextOnlyFinish(
+  state: { turn: number; nudgedAtTurn?: number; preNudgeText?: string },
+  latestText: string,
+): string {
+  const acquiesced = state.nudgedAtTurn !== undefined && state.turn === state.nudgedAtTurn + 1;
+  return (acquiesced && state.preNudgeText) || latestText;
+}
+
+/**
+ * Prior session exchanges to replay at the front of a new run's transcript.
+ *
+ * Every run previously started from the prompt alone, so the agent forgot the
+ * conversation after every single message — asking "what is my name?" one message after
+ * stating it could not work, and switching models mid-chat was blamed for a memory that
+ * never existed. History goes in as plain text, which is also why a mid-chat model switch
+ * is safe: there are no signed thinking blocks or provider-minted tool ids to replay onto
+ * a backend that did not produce them.
+ *
+ * Walks newest-first and keeps whole messages until the token budget runs out, so what
+ * survives is always the most recent context, never a truncated middle of an old one.
+ * The caller passes messages excluding the current prompt.
+ */
+export function historyMessages(
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxTokens: number,
+): LlmMessage[] {
+  if (maxTokens <= 0) return [];
+
+  const kept: LlmMessage[] = [];
+  let budget = maxTokens;
+
+  for (let index = history.length - 1; index >= 0; index--) {
+    const message = history[index];
+    const cost = estimateTokens(message.content);
+    if (cost > budget) break;
+    budget -= cost;
+    // Assistant content is a block array by type; a plain text block is the one shape
+    // every provider already renders.
+    kept.unshift(
+      message.role === 'assistant'
+        ? { role: 'assistant', content: [{ type: 'text', text: message.content }] }
+        : { role: 'user', content: message.content },
+    );
+  }
+
+  return kept;
 }
 
 export const SEARCH_FIRST_NUDGE =
@@ -145,6 +214,7 @@ export class AgentService {
     );
 
     const transcript = new TranscriptManager(resolved.provider.contextWindow);
+    for (const message of this.sessionHistory(sessionId)) transcript.push(message);
     transcript.push({ role: 'user', content: await this.seedPrompt(prompt, resolved.provider, workspace) });
 
     const state: RunState = {
@@ -213,6 +283,32 @@ export class AgentService {
       // Seeding is an optimisation; a failure here must not prevent the run.
       this.logger.debug('Could not seed initial context', { error: String(error) });
       return prompt;
+    }
+  }
+
+  /**
+   * The session's prior exchanges, budgeted, for the front of a new transcript.
+   *
+   * The current prompt is recorded to chat_messages *before* the run starts, so it
+   * arrives here as the list's tail and is dropped — the run seeds it separately, and
+   * sending it twice reads to the model as the user repeating themselves.
+   */
+  private sessionHistory(sessionId: string | undefined): LlmMessage[] {
+    if (!sessionId) return [];
+
+    const maxTokens = vscode.workspace
+      .getConfiguration('repo-intelligence')
+      .get<number>('agent.historyMaxTokens', 4000);
+    if (maxTokens <= 0) return [];
+
+    try {
+      const messages = this.container.chatRepository.listMessages(sessionId);
+      if (messages.at(-1)?.role === 'user') messages.pop();
+      return historyMessages(messages, maxTokens);
+    } catch (error) {
+      // Memory is an enhancement; a history that cannot be read must not block the run.
+      this.logger.debug('Could not load session history', { error: String(error) });
+      return [];
     }
   }
 
@@ -329,10 +425,16 @@ export class AgentService {
           // still terminates on the next turn rather than looping.
           if (shouldNudgeToSearch(state)) {
             state.nudgedToSearch = true;
+            state.preNudgeText = textOf(result.content);
+            state.nudgedAtTurn = state.turn;
             state.transcript.push({ role: 'user', content: SEARCH_FIRST_NUDGE });
             continue;
           }
-          return this.finish(state, 'completed', textOf(result.content));
+          return this.finish(
+            state,
+            'completed',
+            responseForTextOnlyFinish(state, textOf(result.content)),
+          );
         }
 
         const signature = toolUses.map((call) => `${call.name}:${JSON.stringify(call.input)}`).join('|');

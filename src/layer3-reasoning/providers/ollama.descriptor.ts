@@ -31,13 +31,12 @@ async function listInstalledModels(baseUrl: string): Promise<ProviderOption[]> {
     tags.map((tag) => ({ name: tag.name, parameterSize: tag.details?.parameter_size })),
   ).map((model) => {
     const assessment = assessModel(model.name, model.parameterSize);
-    const label =
-      assessment.fitness === 'good'
-        ? model.name
-        : `${model.name}  $(warning)`;
     return {
       value: model.name,
-      label,
+      // Plain name: the old `$(warning)` codicon suffix rendered as literal text in the
+      // React picker. The caution flag carries the warning instead, styled per surface.
+      label: model.name,
+      caution: assessment.fitness !== 'good',
       description: model.parameterSize,
       detail:
         assessment.fitness === 'good'

@@ -119,6 +119,30 @@ function RunPanel({ entry }: { entry: TimelineEntry }) {
     );
   }
 
+  // A successfully finished run folds its process behind one line, the way an assistant
+  // that shows its work on request reads better than one that always shows it. A live run
+  // stays open — the streamed text exists nowhere else yet — and a failed or cancelled
+  // run stays open too, because a hidden failure looks like a hang.
+  if (finished?.kind === 'finished' && finished.status === 'completed') {
+    const toolCount = steps.filter((step) => step.kind === 'tool').length;
+    return (
+      <details className="run run-collapsed">
+        <summary className="run-summary">
+          {/* Zero usage means the backend reported nothing, not that the run was free —
+              usageLabel renders nothing in that case rather than "0 in, 0 out". */}
+          Worked for {finished.turns} turn{finished.turns === 1 ? '' : 's'}
+          {toolCount > 0 && ` · ${toolCount} tool call${toolCount === 1 ? '' : 's'}`}
+          {usageLabel(finished.usage)}
+        </summary>
+        <div className="run-body">
+          {steps.map((step, index) => (
+            <Step key={index} step={step} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
   return (
     <div className="run">
       <div className="run-header">
@@ -137,8 +161,6 @@ function RunPanel({ entry }: { entry: TimelineEntry }) {
       {finished?.kind === 'finished' && (
         <div className="run-footer">
           {finished.status} after {finished.turns} turn{finished.turns === 1 ? '' : 's'}
-          {/* Zero means the backend reported nothing, not that the run was free. Printing
-              "0 in, 0 out" invites the reader to believe a number that was never measured. */}
           {usageLabel(finished.usage)}
         </div>
       )}

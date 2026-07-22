@@ -20,6 +20,8 @@ export interface ProviderOption {
   label: string;
   description?: string;
   detail?: string;
+  /** The option works but deserves a visible warning — e.g. a model too small to drive tools. */
+  caution?: boolean;
 }
 
 /** Serialisable conditional visibility. Deliberately data, not a predicate function. */

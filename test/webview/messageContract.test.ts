@@ -60,7 +60,17 @@ describe('host → webview message contract', () => {
       {
         type: 'modelState',
         state: { activeProviderId: 'a', activeProviderLabel: 'A', mode: 'implement' },
-        models: [],
+        models: [
+          {
+            providerId: 'ollama',
+            providerLabel: 'Ollama (local)',
+            modelId: 'gemma2:2b',
+            label: 'gemma2:2b',
+            detail: 'Too small for tool calling — will ask you where files are',
+            available: true,
+            caution: true,
+          },
+        ],
       },
       { type: 'providers', providers: [] },
       { type: 'approvals', approvals: [] },

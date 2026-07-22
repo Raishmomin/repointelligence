@@ -2,7 +2,7 @@
   "name": "repo-intelligence",
   "displayName": "Repository Intelligence Engine",
   "description": "AI-powered repository analysis engine that deeply understands your codebase before generating context-aware code using local Ollama models.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "repo-intelligence",
   "license": "MIT",
   "repository": {
@@ -262,6 +262,12 @@
           "minimum": 1,
           "maximum": 100,
           "description": "Maximum model turns in a single agent run before it stops and reports back."
+        },
+        "repo-intelligence.agent.historyMaxTokens": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 0,
+          "markdownDescription": "Token budget for replaying earlier messages from the chat session into each agent run, newest first. This is what lets the agent remember the conversation. Set `0` to disable history entirely."
         },
         "repo-intelligence.agent.maxOutputTokens": {
           "type": "number",

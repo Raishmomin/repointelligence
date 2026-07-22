@@ -4,11 +4,14 @@ import { ProviderFactory } from './ProviderFactory';
 import { ProviderSetupService } from './ProviderSetupService';
 
 /**
- * Aggregates every model the user can pick, across every provider.
+ * Aggregates every model the user can pick, across every configured provider.
  *
- * Unconfigured providers still appear — selecting one is how the user discovers they need
- * a key, and hiding them makes the extension look like it only supports whatever is
- * already set up.
+ * Unconfigured providers are hidden. They used to appear as "Set up X…" rows so the
+ * dropdown doubled as a discovery surface, but in practice that filled the picker with
+ * models that could not be used — the ＋ button next to the picker is the setup entry
+ * point, and a list of choices should contain only things that can actually be chosen.
+ * A provider that IS configured but fails to list still gets its "unavailable" row:
+ * that is information about something the user set up, not noise.
  */
 export class ModelCatalogService {
   private cache: { at: number; models: ModelOptionDto[] } | undefined;
@@ -37,6 +40,8 @@ export class ModelCatalogService {
     // firing five of those at once makes the dropdown feel broken rather than slow.
     for (const descriptor of registry.chatCapable()) {
       const configured = await store.isConfigured(descriptor);
+      if (!configured) continue;
+
       const field = chatModelField(descriptor);
       if (!field) continue;
 
@@ -44,10 +49,10 @@ export class ModelCatalogService {
         providerId: descriptor.id,
         providerLabel: descriptor.label,
         icon: descriptor.icon,
-        available: configured,
+        available: true,
       };
 
-      // A fixed list is known without any I/O, so it renders even when unconfigured.
+      // A fixed list is known without any I/O.
       if (field.source.type === 'fixed') {
         models.push(
           ...field.source.options.map((option) => ({
@@ -60,17 +65,6 @@ export class ModelCatalogService {
         continue;
       }
 
-      if (!configured) {
-        // Nothing to list yet, but the provider must still be visible and selectable.
-        models.push({
-          ...base,
-          modelId: '',
-          label: `Set up ${descriptor.label}…`,
-          detail: 'Needs an API key',
-        });
-        continue;
-      }
-
       try {
         const result = await this.setup.listModels(descriptor.id, field.id, store.read(descriptor));
         models.push(
@@ -79,6 +73,7 @@ export class ModelCatalogService {
             modelId: option.value,
             label: option.label,
             detail: option.detail ?? option.description,
+            caution: option.caution,
           })),
         );
       } catch {

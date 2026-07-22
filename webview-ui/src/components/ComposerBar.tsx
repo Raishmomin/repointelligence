@@ -96,7 +96,7 @@ export function ComposerBar({
 
       {openMenu === 'model' && (
         <div className="menu" role="listbox">
-          {grouped.length === 0 && <div className="menu-empty">No providers configured yet.</div>}
+          {grouped.length === 0 && <div className="menu-empty">No providers set up yet — use ＋ to add one.</div>}
           {grouped.map(([providerId, entries]) => (
             <div key={providerId} className="menu-group">
               <div className="menu-group-label">
@@ -119,7 +119,16 @@ export function ComposerBar({
                     else onSelectModel(model.providerId, model.modelId);
                   }}
                 >
-                  <span className="menu-item-label">{model.label}</span>
+                  <span className="menu-item-label">
+                    {model.label}
+                    {/* The host used to append a "$(warning)" codicon here, which this
+                        React menu rendered as literal text. */}
+                    {model.caution && (
+                      <span className="menu-caution" title={model.detail}>
+                        ⚠
+                      </span>
+                    )}
+                  </span>
                   {model.detail && <span className="menu-item-detail">{model.detail}</span>}
                 </button>
               ))}

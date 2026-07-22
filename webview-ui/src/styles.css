@@ -713,3 +713,30 @@ details.step-tool {
 .session-delete:focus-visible {
   opacity: 1;
 }
+
+/* A successfully finished run folds behind its summary line. */
+.run-collapsed {
+  border: 1px solid var(--vscode-panel-border);
+}
+
+.run-summary {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.run-summary:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.run-collapsed[open] .run-summary {
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+/* A pickable model that deserves hesitation — too small to drive tools reliably. */
+.menu-caution {
+  margin-left: 6px;
+  color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
+}

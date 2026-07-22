@@ -76,6 +76,8 @@ export interface ModelOptionDto {
   detail?: string;
   /** False when the provider still needs an API key or is unreachable. */
   available: boolean;
+  /** Selectable, but with a visible warning — e.g. a model too small to drive tools. */
+  caution?: boolean;
 }
 
 export interface ModelStateDto {

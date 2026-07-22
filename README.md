@@ -83,7 +83,7 @@ This is the part worth understanding before you trust the agent with a repositor
    Or from a terminal:
 
    ```bash
-   code --install-extension repo-intelligence-0.1.1.vsix
+   code --install-extension repo-intelligence-0.1.2.vsix
    ```
 
 3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
