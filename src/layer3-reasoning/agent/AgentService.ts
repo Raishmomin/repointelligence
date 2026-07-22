@@ -64,6 +64,8 @@ interface RunState {
   preNudgeText?: string;
   /** Turn on which the nudge was injected, to recognise the turn straight after it. */
   nudgedAtTurn?: number;
+  /** Last non-empty text any turn produced, the fallback when the final turn is silent. */
+  lastText?: string;
   /** Which provider served this run, so a resume on a different one can be refused. */
   providerId: ProviderId;
 }
@@ -93,13 +95,19 @@ export function shouldNudgeToSearch(state: {
  * correction, not to the user. The text it gave before being corrected was the natural
  * answer, so that is preferred. Any turn in between — a search the nudge successfully
  * provoked — makes the latest text a real answer again.
+ *
+ * When the final turn carries no text at all, fall back to the last non-empty text of any
+ * earlier turn. Small models routinely say the answer *alongside* a tool call and then go
+ * silent once the results arrive — without the fallback that reply is recorded as empty,
+ * no bubble is written, and the user sees a run that "worked for 3 turns" and said
+ * nothing.
  */
 export function responseForTextOnlyFinish(
-  state: { turn: number; nudgedAtTurn?: number; preNudgeText?: string },
+  state: { turn: number; nudgedAtTurn?: number; preNudgeText?: string; lastText?: string },
   latestText: string,
 ): string {
   const acquiesced = state.nudgedAtTurn !== undefined && state.turn === state.nudgedAtTurn + 1;
-  return (acquiesced && state.preNudgeText) || latestText;
+  return (acquiesced && state.preNudgeText) || latestText || state.lastText || '';
 }
 
 /**
@@ -400,6 +408,10 @@ export class AgentService {
         state.usage.inputTokens += result.usage.inputTokens;
         state.usage.outputTokens += result.usage.outputTokens;
         state.usage.cacheReadTokens += result.usage.cacheReadTokens ?? 0;
+
+        // Kept for the silent-final-turn fallback: an answer said alongside a tool call
+        // must survive to the finish even if the model has nothing to add afterwards.
+        state.lastText = textOf(result.content) || state.lastText;
 
         // Replayed verbatim: thinking blocks must go back byte-identical, and server-side
         // compaction state rides along in the provider's own representation.

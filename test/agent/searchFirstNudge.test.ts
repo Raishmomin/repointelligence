@@ -85,3 +85,30 @@ describe('responseForTextOnlyFinish', () => {
     expect(response).toBe('I understand. I will search.');
   });
 });
+
+describe('silent final turn', () => {
+  it('falls back to the last text any turn produced', () => {
+    // The reported failure: "hello my name is jjj" — the model greeted alongside its
+    // query_index call on turn 2, then had nothing to add after the results on turn 3.
+    // The empty final text was recorded as the reply, so no bubble appeared at all.
+    const response = responseForTextOnlyFinish(
+      { turn: 3, nudgedAtTurn: 1, lastText: 'Hello jjj! Nice to meet you.' },
+      '',
+    );
+
+    expect(response).toBe('Hello jjj! Nice to meet you.');
+  });
+
+  it('prefers the final text when there is one', () => {
+    const response = responseForTextOnlyFinish(
+      { turn: 3, nudgedAtTurn: 1, lastText: 'earlier commentary' },
+      'The footer is at components/layout/Footer.tsx.',
+    );
+
+    expect(response).toBe('The footer is at components/layout/Footer.tsx.');
+  });
+
+  it('returns empty only when the whole run said nothing', () => {
+    expect(responseForTextOnlyFinish({ turn: 2 }, '')).toBe('');
+  });
+});

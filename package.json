@@ -2,7 +2,7 @@
   "name": "repo-intelligence",
   "displayName": "Repository Intelligence Engine",
   "description": "AI-powered repository analysis engine that deeply understands your codebase before generating context-aware code using local Ollama models.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "repo-intelligence",
   "license": "MIT",
   "repository": {

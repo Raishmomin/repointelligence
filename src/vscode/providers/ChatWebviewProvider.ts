@@ -552,7 +552,14 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this.postToWebview({ type: 'status', status: 'thinking', message: mode === 'implement' ? 'Inspecting your project and preparing a reviewed change set…' : 'Inspecting your project…' });
     const run = await this.container.agentService.run(text, mode, workspace, this.activeSessionId ?? undefined);
 
-    if (run.response) await this.recordMessage('assistant', run.response);
+    // A completed run always records a reply. Without the fallback line, a model that
+    // produced no text across the whole run leaves the timeline showing only "worked for
+    // N turns" and nothing else — which reads as the extension eating the answer.
+    if (run.response) {
+      await this.recordMessage('assistant', run.response);
+    } else if (run.status === 'completed') {
+      await this.recordMessage('assistant', '(The model finished without producing a reply — try rephrasing, or a larger model.)');
+    }
     this.showAgentRun(run, this.container.agentService.getPendingChangeSets(), this.container.agentService.getPendingCommands());
     this.postToWebview({ type: 'status', status: 'idle' });
     if (run.status === 'awaiting_approval') {
