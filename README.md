@@ -83,10 +83,22 @@ This is the part worth understanding before you trust the agent with a repositor
    Or from a terminal:
 
    ```bash
-   code --install-extension repo-intelligence-0.1.3.vsix
+   code --install-extension repo-intelligence-0.1.4.vsix
    ```
 
 3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
+
+### Updating to a newer version
+
+Installing a newer `.vsix` replaces the older one — no uninstall needed, and your
+sessions, settings and API keys are kept. Download the latest file from
+[releases](https://github.com/Raishmomin/repointelligence/releases), then:
+
+```bash
+code --install-extension repo-intelligence-<new-version>.vsix
+```
+
+Reload VS Code and check the version under Extensions → Repository Intelligence Engine.
 
 ### You also need a model
 

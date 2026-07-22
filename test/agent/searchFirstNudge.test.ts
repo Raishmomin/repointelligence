@@ -112,3 +112,13 @@ describe('silent final turn', () => {
     expect(responseForTextOnlyFinish({ turn: 2 }, '')).toBe('');
   });
 });
+
+describe('conversational messages', () => {
+  it('the nudge leaves a direct-answer exit for non-repo questions', () => {
+    // Observed: "what is my name?" produced a repository search for the name instead of
+    // an answer from the conversation. A nudge that only permits searching corners the
+    // model into treating small talk as a code task.
+    expect(SEARCH_FIRST_NUDGE).toMatch(/not about the codebase/i);
+    expect(SEARCH_FIRST_NUDGE).toMatch(/answer it directly/i);
+  });
+});

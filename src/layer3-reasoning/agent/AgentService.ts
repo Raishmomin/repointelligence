@@ -151,11 +151,13 @@ export function historyMessages(
 }
 
 export const SEARCH_FIRST_NUDGE =
-  '[You ended your turn without looking at the repository at all. You have glob (find ' +
-  'files by name), grep (search file contents) and query_index (search by concept). Use ' +
-  'them to find what you need — do not ask the user for a path or filename, since ' +
-  'searching is faster than asking. If you have already searched and genuinely cannot ' +
-  'proceed, say exactly what you searched for and what came back.]';
+  '[You ended your turn without looking at the repository at all. If the question is ' +
+  'about this codebase, use glob (find files by name), grep (search file contents) or ' +
+  'query_index (search by concept) to find what you need — do not ask the user for a ' +
+  'path or filename, since searching is faster than asking. If you have already searched ' +
+  'and genuinely cannot proceed, say exactly what you searched for and what came back. ' +
+  'If the message is not about the codebase at all — a greeting, or a question about the ' +
+  'conversation itself — just answer it directly from the conversation.]';
 
 /**
  * Runs the agent loop.
