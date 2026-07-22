@@ -132,6 +132,19 @@ export function App() {
                   }
                 }}
               />
+              {/* Offered only between runs, and only once there is an exchange to redo.
+                  Retry discards the last reply and re-runs its prompt — each run starts
+                  from the prompt alone, so this is a fresh attempt, not a continuation. */}
+              {!busy && !input && state.messages.length > 0 && (
+                <button
+                  type="button"
+                  className="btn"
+                  title="Discard the last reply and run its prompt again"
+                  onClick={() => post({ type: 'retryMessage' })}
+                >
+                  ↻ Retry
+                </button>
+              )}
               <button type="button" className="btn btn-primary" disabled={busy} onClick={send}>
                 {busy ? '…' : 'Send'}
               </button>

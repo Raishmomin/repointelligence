@@ -216,8 +216,37 @@ export class AgentService {
     }
   }
 
-  cancel(runId: string): void {
-    this.active.get(runId)?.cancellation.cancel();
+  async cancel(runId: string): Promise<void> {
+    const state = this.active.get(runId);
+    if (!state) return;
+
+    state.cancellation.cancel();
+
+    // A parked run is not inside loop(), so the token alone cannot end it — it would sit
+    // in `active` as awaiting_approval forever, its proposals still listed as pending and
+    // the panel still showing approval cards for a run the user asked to stop. Rejecting
+    // every outstanding proposal answers each tool_use; the last rejection re-enters the
+    // loop, which sees the cancelled token on its first check and finishes the run as
+    // cancelled.
+    if (state.pending) {
+      const changeSetIds = [...this.pendingChangeSets.values()]
+        .filter((change) => change.runId === runId)
+        .map((change) => change.id);
+      const commandIds = [...this.pendingCommands.values()]
+        .filter((request) => request.runId === runId)
+        .map((request) => request.id);
+
+      for (const id of changeSetIds) {
+        await this.rejectChangeSet(id).catch((error) =>
+          this.logger.warn('Could not reject a change set while cancelling', { error: String(error) }),
+        );
+      }
+      for (const id of commandIds) {
+        await this.rejectCommand(id).catch((error) =>
+          this.logger.warn('Could not reject a command while cancelling', { error: String(error) }),
+        );
+      }
+    }
   }
 
   /** Runs currently in flight or parked awaiting approval. */

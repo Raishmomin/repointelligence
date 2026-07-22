@@ -110,6 +110,38 @@ export class ChatRepository {
   }
 
   /**
+   * Drops everything after the session's last user message and returns that message.
+   *
+   * Retry re-runs a prompt rather than continuing from the reply, so the reply it is
+   * replacing has to go — otherwise the transcript accumulates every rejected attempt.
+   * Safe to call twice: with the trailing assistant turns already gone it simply returns
+   * the same prompt again.
+   *
+   * @returns the prompt to re-run, or null when the session has no user message.
+   */
+  rewindToLastUserMessage(sessionId: string): string | null {
+    const last = this.db.queryOne<{ id: string; content: string; created_at: number }>(
+      `SELECT id, content, created_at FROM chat_messages
+       WHERE session_id = ? AND role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      [sessionId],
+    );
+    if (!last) return null;
+
+    // Compared by rowid as well as timestamp: messages recorded in the same millisecond
+    // would otherwise be ambiguous, and an assistant reply to a fast tool-free turn can
+    // land on the same millisecond as its prompt.
+    this.db.run(
+      `DELETE FROM chat_messages
+       WHERE session_id = ?
+         AND (created_at > ? OR (created_at = ? AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?)))`,
+      [sessionId, last.created_at, last.created_at, last.id],
+    );
+    this.db.save();
+
+    return last.content;
+  }
+
+  /**
    * Names a session after its first message.
    *
    * No-op once the session has a title of its own, so a retry or a reload cannot rename a

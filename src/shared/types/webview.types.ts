@@ -134,6 +134,8 @@ export type WebviewToExtension =
   | { type: 'selectSession'; sessionId: string }
   | { type: 'deleteSession'; sessionId: string }
   | { type: 'cancelRun' }
+  /** Re-run the session's last prompt, discarding the reply it produced. */
+  | { type: 'retryMessage' }
   | { type: 'setMode'; mode: TaskModeDto }
   | { type: 'selectModel'; providerId: string; modelId: string }
   | { type: 'approveChangeSet'; changeSetId: string }

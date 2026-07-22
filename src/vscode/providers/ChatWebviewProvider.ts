@@ -261,6 +261,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             break;
           case 'cancelRun':
             this.container.agentService.getRunningRunIds().forEach(id => this.container.agentService.cancel(id));
+            this.pushApprovals();
+            break;
+          case 'retryMessage':
+            await this.handleRetry();
             break;
           case 'approveChangeSet':
             await this.container.agentService.approveChangeSet(message.changeSetId);
@@ -507,6 +511,31 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   /** Main sidebar path: requests become auditable agent runs, not free-form code snippets. */
   private async handleAgentMessage(text: string, rawMode: unknown): Promise<void> {
+    // Record the prompt before the run starts. The agent path previously wrote nothing to
+    // chat_messages, so your own message never appeared and nothing survived a reload.
+    await this.recordMessage('user', text);
+    await this.startAgentRun(text, rawMode);
+  }
+
+  /**
+   * Re-runs the session's last prompt.
+   *
+   * The prompt is already recorded, so this deliberately does not go through
+   * handleAgentMessage — doing so would write a second copy of it. Each agent run builds
+   * its transcript from the prompt alone and carries nothing over from the previous run,
+   * so a retry is a genuinely fresh attempt rather than a continuation.
+   */
+  private async handleRetry(): Promise<void> {
+    if (!this.activeSessionId) return;
+
+    const prompt = this.container.chatRepository.rewindToLastUserMessage(this.activeSessionId);
+    if (!prompt) return;
+
+    await this.loadActiveSessionMessages();
+    await this.startAgentRun(prompt, this.activeMode);
+  }
+
+  private async startAgentRun(text: string, rawMode: unknown): Promise<void> {
     const mode = rawMode === 'explain' || rawMode === 'plan' || rawMode === 'implement' ? rawMode : 'implement';
     const folders = vscode.workspace.workspaceFolders ?? [];
     if (!folders.length) throw new Error('Open a workspace folder before starting the coding agent.');
@@ -514,10 +543,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       ? folders[0]
       : await vscode.window.showQuickPick(folders.map(folder => ({ label: folder.name, folder })), { placeHolder: 'Choose the workspace folder for this agent task' }).then(item => item?.folder);
     if (!workspace) return;
-
-    // Record the prompt before the run starts. The agent path previously wrote nothing to
-    // chat_messages, so your own message never appeared and nothing survived a reload.
-    await this.recordMessage('user', text);
 
     this.postToWebview({ type: 'status', status: 'thinking', message: mode === 'implement' ? 'Inspecting your project and preparing a reviewed change set…' : 'Inspecting your project…' });
     const run = await this.container.agentService.run(text, mode, workspace, this.activeSessionId ?? undefined);
