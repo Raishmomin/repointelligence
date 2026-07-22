@@ -83,6 +83,6 @@ describe('toWireSchema', () => {
       .sort();
 
     // Ollama is local and needs none; every cloud provider does.
-    expect(needsKey).toEqual(['anthropic', 'gemini', 'groq', 'nvidia', 'openai', 'openrouter']);
+    expect(needsKey).toEqual(['anthropic', 'gemini', 'groq', 'nvidia', 'openai', 'opencode-zen', 'openrouter']);
   });
 });

@@ -80,10 +80,42 @@ body {
 .bubble-user {
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-panel-border);
+  border-left: 3px solid var(--vscode-focusBorder);
+  margin-left: 24px;
 }
 
 .bubble-assistant {
-  background: var(--vscode-editor-background);
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-panel-border);
+  margin-right: 24px;
+}
+
+/* Who is speaking, without relying on alignment alone — indistinguishable bubbles were
+   the reported complaint. */
+.bubble-role {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.bubble-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A finished run that used no tools collapses to just its outcome line. */
+.run-quiet {
+  border: none;
+  background: none;
+}
+
+.run-quiet .run-footer {
+  border-top: none;
+  padding: 0 10px 8px;
 }
 
 .run {

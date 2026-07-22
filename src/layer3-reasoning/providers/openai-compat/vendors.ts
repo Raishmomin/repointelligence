@@ -104,6 +104,22 @@ export const VENDORS: VendorConfig[] = [
     sanitizeToolSchema: true,
   },
   {
+    id: 'opencode-zen',
+    label: 'OpenCode Zen',
+    description: 'Curated coding models behind one key',
+    detail: 'Claude, GPT, Gemini, Qwen and more via one gateway. Requires an OpenCode Zen key.',
+    icon: 'zap',
+    docsUrl: 'https://opencode.ai/docs/zen/',
+    defaultBaseUrl: 'https://opencode.ai/zen/v1',
+    // Verified against /models: ids are bare ("claude-sonnet-5"), not the "opencode/"-
+    // prefixed form the opencode client's own config uses.
+    defaultModel: 'claude-sonnet-5',
+    secretKey: 'repo-intelligence.opencodeZen.apiKey',
+    keyPlaceholder: 'API key from opencode.ai/auth',
+    fallbackRank: 65,
+    contextWindow: 200_000,
+  },
+  {
     id: 'openrouter',
     label: 'OpenRouter',
     description: 'Hundreds of models behind one key',

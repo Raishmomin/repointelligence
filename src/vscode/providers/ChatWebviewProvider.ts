@@ -178,6 +178,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   /** Publishes the auditable agent timeline to the existing chat surface. */
   public showAgentRun(run: AgentRun, changes: ChangeSet[], commands: CommandRequest[]): void {
+    // Legacy webview only. The React panel already renders this run three other ways —
+    // the live stream, the recorded assistant bubble, and approval cards — so this blob
+    // was a third copy of the same reply stacked under the other two.
+    if (isReactUiEnabled()) return;
+
     const actions = [
       ...changes.map(change => `- Pending change set: ${change.summary} (${change.operations.length} file operation(s))`),
       ...commands.map(command => `- Pending command approval: \`${command.command} ${command.args.join(' ')}\` — ${command.reason}`),

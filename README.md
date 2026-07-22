@@ -2,7 +2,7 @@
 
 A VS Code extension that indexes your codebase into a local knowledge base, then uses it to ground an approval-gated coding agent. The agent reads freely, edits surgically, and stops for your approval before it writes anything to disk or runs any command.
 
-Works against **Claude**, **OpenAI**, **Gemini**, **OpenRouter**, **Groq** and **Nvidia NIM** via an API key, or **Ollama** for a fully local, offline setup. Adding another backend is one file and one registry line.
+Works against **Claude**, **OpenAI**, **Gemini**, **OpenCode Zen**, **OpenRouter**, **Groq** and **Nvidia NIM** via an API key, or **Ollama** for a fully local, offline setup. Adding another backend is one file and one registry line.
 
 ---
 
@@ -83,7 +83,7 @@ This is the part worth understanding before you trust the agent with a repositor
    Or from a terminal:
 
    ```bash
-   code --install-extension repo-intelligence-0.1.0.vsix
+   code --install-extension repo-intelligence-0.1.1.vsix
    ```
 
 3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
@@ -98,7 +98,7 @@ The extension is the agent; the model is yours to bring. Either works:
   ollama pull qwen2.5-coder:7b
   ```
 
-- **Cloud** — an API key for any supported provider (Claude, OpenAI, Gemini, OpenRouter, Groq, Nvidia NIM), entered in the extension's provider panel. See [Getting started](#getting-started) for the setup flow.
+- **Cloud** — an API key for any supported provider (Claude, OpenAI, Gemini, OpenCode Zen, OpenRouter, Groq, Nvidia NIM), entered in the extension's provider panel. See [Getting started](#getting-started) for the setup flow.
 
 ### First run
 
@@ -125,6 +125,7 @@ Open the Repo Intelligence view in the activity bar. The bar above the input sho
 | **Ollama** (local) | nothing — lists the models you have pulled |
 | **OpenAI** | API key |
 | **Google Gemini** | API key |
+| **OpenCode Zen** | API key — from [opencode.ai/auth](https://opencode.ai/auth) |
 | **OpenRouter** | API key |
 | **Groq** | API key |
 | **Nvidia NIM** | API key |

@@ -213,12 +213,13 @@ describe('splitThinkTags', () => {
 });
 
 describe('vendor descriptors', () => {
-  it('registers all five vendors', () => {
+  it('registers all six vendors', () => {
     expect(OPENAI_COMPAT_DESCRIPTORS.map((d) => d.id).sort()).toEqual([
       'gemini',
       'groq',
       'nvidia',
       'openai',
+      'opencode-zen',
       'openrouter',
     ]);
   });
@@ -253,7 +254,7 @@ describe('vendor descriptors', () => {
 
   it('joins the real registry without collisions and ranks below Anthropic', () => {
     const registry = new ProviderRegistry();
-    expect(registry.ids()).toHaveLength(7);
+    expect(registry.ids()).toHaveLength(8);
 
     const ranked = registry.byFallbackRank().map((d) => d.id);
     expect(ranked[0]).toBe('anthropic');

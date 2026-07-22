@@ -38,11 +38,17 @@ export function Timeline({
     <div className="timeline">
       {messages.map((message) => (
         <div key={message.id} className={`bubble bubble-${message.role}`}>
-          {message.content}
+          <span className="bubble-role">{message.role === 'user' ? 'You' : 'Assistant'}</span>
+          <div className="bubble-content">{message.content}</div>
         </div>
       ))}
 
-      {streaming && <div className="bubble bubble-assistant">{streaming}</div>}
+      {streaming && (
+        <div className="bubble bubble-assistant">
+          <span className="bubble-role">Assistant</span>
+          <div className="bubble-content">{streaming}</div>
+        </div>
+      )}
 
       {timeline.map((entry, index) => (
         <RunPanel key={`${entry.runId}-${index}`} entry={entry} />
@@ -93,6 +99,26 @@ function RunPanel({ entry }: { entry: TimelineEntry }) {
   const turn = [...entry.steps].reverse().find((step) => step.kind === 'turn');
   const finished = entry.steps.find((step) => step.kind === 'finished');
 
+  // While the run is live, its streamed text is the only place the reply exists, so it
+  // shows here. Once the run finishes, the final reply is recorded as a chat bubble —
+  // repeating it in the panel is the duplication that made the timeline unreadable. A
+  // finished panel keeps only the process: tools, thinking, errors.
+  const steps = finished ? entry.steps.filter((step) => step.kind !== 'text') : entry.steps;
+  const processOnly = finished && steps.every((step) => step.kind === 'turn' || step.kind === 'finished');
+
+  // A finished run that never used a tool has no process worth a panel of its own; the
+  // bubble already says everything it could.
+  if (processOnly && finished.kind === 'finished' && finished.status === 'completed') {
+    return (
+      <div className="run run-quiet">
+        <div className="run-footer">
+          {finished.status} after {finished.turns} turn{finished.turns === 1 ? '' : 's'}
+          {usageLabel(finished.usage)}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="run">
       <div className="run-header">
@@ -104,7 +130,7 @@ function RunPanel({ entry }: { entry: TimelineEntry }) {
         )}
       </div>
       <div className="run-body">
-        {entry.steps.map((step, index) => (
+        {steps.map((step, index) => (
           <Step key={index} step={step} />
         ))}
       </div>

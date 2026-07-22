@@ -166,6 +166,7 @@ describe('ProviderRegistry', () => {
         'nvidia',
         'ollama',
         'openai',
+        'opencode-zen',
         'openrouter',
       ]);
     });
