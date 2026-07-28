@@ -103,11 +103,15 @@ export function shouldNudgeToSearch(state: {
  * nothing.
  */
 export function responseForTextOnlyFinish(
-  state: { turn: number; nudgedAtTurn?: number; preNudgeText?: string; lastText?: string },
+  state: { turn: number; nudgedAtTurn?: number; preNudgeText?: string; lastText?: string; hasToolCalls?: boolean },
   latestText: string,
 ): string {
   const acquiesced = state.nudgedAtTurn !== undefined && state.turn === state.nudgedAtTurn + 1;
-  return (acquiesced && state.preNudgeText) || latestText || state.lastText || '';
+  const text = (acquiesced && state.preNudgeText) || latestText || state.lastText || '';
+  if (!text.trim() && state.hasToolCalls) {
+    return 'Action completed successfully.';
+  }
+  return text;
 }
 
 /**
@@ -447,7 +451,13 @@ export class AgentService {
           return this.finish(
             state,
             'completed',
-            responseForTextOnlyFinish(state, textOf(result.content)),
+            responseForTextOnlyFinish(
+              {
+                ...state,
+                hasToolCalls: state.transcript.all().some((m) => m.role === 'assistant' && Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use')),
+              },
+              textOf(result.content),
+            ),
           );
         }
 
