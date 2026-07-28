@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { AgentStreamStep, ChatMessageDto, PendingApprovalDto } from '@shared/webview.types';
 import type { TimelineEntry } from '../state/appReducer';
+import { MarkdownContent } from './MarkdownContent';
 
 interface Props {
   messages: ChatMessageDto[];
@@ -13,6 +14,88 @@ interface Props {
   onRejectCommand(id: string): void;
   onOpenDiff(changeSetId: string, path: string): void;
 }
+
+// ── Interleaving ─────────────────────────────────────────────
+
+/**
+ * An entry in the unified, chronologically ordered feed.
+ *
+ * The extension host records messages like this:
+ *   1. User message (recorded before the run starts)
+ *   2. Agent run streams in (timeline entry)
+ *   3. Assistant message (recorded after the run finishes)
+ *
+ * So every user message is followed by at most one run panel and then the assistant reply.
+ * We pair them by position: user messages at index 0, 2, 4… and assistant replies at
+ * 1, 3, 5… Each user message is the "turn owner" for the timeline entry that streamed in
+ * between it and its assistant reply.
+ */
+type FeedItem =
+  | { kind: 'user'; message: ChatMessageDto }
+  | { kind: 'run'; entry: TimelineEntry }
+  | { kind: 'assistant'; message: ChatMessageDto }
+  | { kind: 'streaming'; text: string };
+
+function buildFeed(
+  messages: ChatMessageDto[],
+  timeline: TimelineEntry[],
+  streaming: string,
+): FeedItem[] {
+  const feed: FeedItem[] = [];
+
+  // Timeline entries that have not yet been placed into the feed.
+  // We consume them in order as we walk the message list.
+  let nextRun = 0;
+
+  // Walk messages in order. The agent flow produces strict pairs:
+  // user → (agent run) → assistant, user → (agent run) → assistant, …
+  // Legacy non-agent chat (handleSendMessage) does user → assistant with no run.
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    if (msg.role === 'user') {
+      feed.push({ kind: 'user', message: msg });
+
+      // After a user message, check if there is a run entry that belongs to this turn.
+      // A run belongs to this turn if the next message is an assistant reply (the run
+      // happened between them) or if this is the last message (the run is still live).
+      const nextMsg = messages[i + 1];
+      const isLastMessage = i === messages.length - 1;
+
+      if (nextRun < timeline.length && (isLastMessage || nextMsg?.role === 'assistant')) {
+        // Skip timeline entries with runId 'log' — those are showAgentLog calls
+        // (command output, legacy timeline) that are not tied to a conversation turn.
+        while (nextRun < timeline.length && timeline[nextRun].runId === 'log') {
+          feed.push({ kind: 'run', entry: timeline[nextRun] });
+          nextRun++;
+        }
+        if (nextRun < timeline.length) {
+          feed.push({ kind: 'run', entry: timeline[nextRun] });
+          nextRun++;
+        }
+      }
+    } else {
+      // Assistant message
+      feed.push({ kind: 'assistant', message: msg });
+    }
+  }
+
+  // Any remaining timeline entries that were not matched to a message pair
+  // (e.g. a run started but no assistant reply yet, or log entries after the last message).
+  while (nextRun < timeline.length) {
+    feed.push({ kind: 'run', entry: timeline[nextRun] });
+    nextRun++;
+  }
+
+  // Live streaming text (before the assistant message is committed).
+  if (streaming) {
+    feed.push({ kind: 'streaming', text: streaming });
+  }
+
+  return feed;
+}
+
+// ── Component ────────────────────────────────────────────────
 
 /** Chat history, the live agent timeline, and any approvals waiting on the user. */
 export function Timeline({
@@ -34,25 +117,40 @@ export function Timeline({
     endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [messages.length, streaming, timeline, approvals.length]);
 
+  const feed = useMemo(
+    () => buildFeed(messages, timeline, streaming),
+    [messages, timeline, streaming],
+  );
+
   return (
     <div className="timeline">
-      {messages.map((message) => (
-        <div key={message.id} className={`bubble bubble-${message.role}`}>
-          <span className="bubble-role">{message.role === 'user' ? 'You' : 'Assistant'}</span>
-          <div className="bubble-content">{message.content}</div>
-        </div>
-      ))}
-
-      {streaming && (
-        <div className="bubble bubble-assistant">
-          <span className="bubble-role">Assistant</span>
-          <div className="bubble-content">{streaming}</div>
-        </div>
-      )}
-
-      {timeline.map((entry, index) => (
-        <RunPanel key={`${entry.runId}-${index}`} entry={entry} />
-      ))}
+      {feed.map((item, index) => {
+        switch (item.kind) {
+          case 'user':
+            return (
+              <div key={item.message.id} className="bubble bubble-user">
+                <span className="bubble-role">You</span>
+                <div className="bubble-content">{item.message.content}</div>
+              </div>
+            );
+          case 'assistant':
+            return (
+              <div key={item.message.id} className="bubble bubble-assistant">
+                <span className="bubble-role">Assistant</span>
+                <MarkdownContent className="bubble-content" content={item.message.content} />
+              </div>
+            );
+          case 'run':
+            return <RunPanel key={`run-${item.entry.runId}-${index}`} entry={item.entry} />;
+          case 'streaming':
+            return (
+              <div key="streaming" className="bubble bubble-assistant">
+                <span className="bubble-role">Assistant</span>
+                <MarkdownContent className="bubble-content" content={item.text} />
+              </div>
+            );
+        }
+      })}
 
       {approvals.length > 0 && (
         <div className="approvals">
@@ -80,6 +178,8 @@ export function Timeline({
     </div>
   );
 }
+
+// ── Run panel ────────────────────────────────────────────────
 
 /**
  * Renders the token tail of a run footer, or nothing when there is nothing to report.

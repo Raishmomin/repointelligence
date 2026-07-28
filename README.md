@@ -6,6 +6,91 @@ Works against **Claude**, **OpenAI**, **Gemini**, **OpenCode Zen**, **OpenRouter
 
 ---
 
+## Installation
+
+### From a release (recommended)
+
+1. Download `repo-intelligence-<version>.vsix` from the [latest release](https://github.com/Raishmomin/repointelligence/releases).
+2. In VS Code, open the Extensions panel (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>), click the **⋯** menu in its top-right corner, and choose **Install from VSIX…**, then pick the downloaded file.
+
+   Or from a terminal:
+
+   ```bash
+   code --install-extension repo-intelligence-0.1.4.vsix
+   ```
+
+3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
+
+### Updating to a newer version
+
+Installing a newer `.vsix` replaces the older one — no uninstall needed, and your
+sessions, settings and API keys are kept. Download the latest file from
+[releases](https://github.com/Raishmomin/repointelligence/releases), then:
+
+```bash
+code --install-extension repo-intelligence-<new-version>.vsix
+```
+
+Reload VS Code and check the version under Extensions → Repository Intelligence Engine.
+
+### You also need a model
+
+The extension is the agent; the model is yours to bring. Either works:
+
+- **Local, free, offline** — install [Ollama](https://ollama.com), then:
+
+  ```bash
+  ollama pull qwen2.5-coder:7b
+  ```
+
+- **Cloud** — an API key for any supported provider (Claude, OpenAI, Gemini, OpenCode Zen, OpenRouter, Groq, Nvidia NIM), entered in the extension's provider panel. See [Getting started](#getting-started) for the setup flow.
+
+### First run
+
+1. Open a workspace folder.
+2. Run **`Repo Intelligence: Scan Repository`** from the command palette to index it.
+3. Open the Repo Intelligence panel and ask something — *"where is the footer component?"* is a good first test.
+
+---
+
+## Getting started
+
+To build from source instead:
+
+```bash
+npm install
+npm run build
+```
+
+Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
+
+Open the Repo Intelligence view in the activity bar. The bar above the input shows your active **model** and **mode** — click either to change it, or **＋** to add a platform:
+
+| Provider | Needs |
+|---|---|
+| **Anthropic** (Claude) | API key |
+| **Ollama** (local) | nothing — lists the models you have pulled |
+| **OpenAI** | API key |
+| **Google Gemini** | API key |
+| **OpenCode Zen** | API key — from [opencode.ai/auth](https://opencode.ai/auth) |
+| **OpenRouter** | API key |
+| **Groq** | API key |
+| **Nvidia NIM** | API key |
+
+Keys go into the OS keychain via `SecretStorage`, never `settings.json`. Setup validates against the live backend before saving, and models are listed from the provider itself rather than hardcoded.
+
+The same flow is available from the command palette as **`Repo Intelligence: Choose Model Provider`**. The status bar shows the active provider and model, turning amber if a run falls back to a different backend than the one you chose.
+
+Then run `Repo Intelligence: Scan Repository` to index the workspace.
+
+> **Model choice matters more than anything else here.** The agent works by emitting structured tool calls. A small general-purpose local model cannot do that reliably, and the way it fails is by replying in prose — often by asking *you* where a file is instead of searching for it. Anything under about 7B parameters will do this. The model picker flags it, but it is worth knowing why.
+
+### Adding a provider
+
+A new backend is one implementation file, one descriptor, and one line in [src/layer3-reasoning/providers/registry.ts](src/layer3-reasoning/providers/registry.ts) — and for anything OpenAI-compatible, just a row in [`vendors.ts`](src/layer3-reasoning/providers/openai-compat/vendors.ts). The descriptor declares what configuration the provider needs — secrets, URLs, fixed or dynamically-listed models — and that single declaration drives the setup wizard, validation, the status bar, and the fallback chain. No changes to `ProviderFactory`, no union type to extend, no `package.json` edit.
+
+---
+
 ## Architecture
 
 Three layers, each depending only on the ones below it.
@@ -70,89 +155,6 @@ This is the part worth understanding before you trust the agent with a repositor
 | Nothing happens without a record | Runs, transcripts, change sets, command requests, and approvals are all persisted |
 
 **One write path.** `ChangeSetService` is the only module permitted to mutate workspace files. An ESLint rule (`no-restricted-syntax` in `eslint.config.mjs`) fails the build if any other module calls `writeFileSync` and friends — so the guarantees above cannot be bypassed by accident.
-
----
-
-## Installation
-
-### From a release (recommended)
-
-1. Download `repo-intelligence-<version>.vsix` from the [latest release](https://github.com/Raishmomin/repointelligence/releases).
-2. In VS Code, open the Extensions panel (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>), click the **⋯** menu in its top-right corner, and choose **Install from VSIX…**, then pick the downloaded file.
-
-   Or from a terminal:
-
-   ```bash
-   code --install-extension repo-intelligence-0.1.4.vsix
-   ```
-
-3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
-
-### Updating to a newer version
-
-Installing a newer `.vsix` replaces the older one — no uninstall needed, and your
-sessions, settings and API keys are kept. Download the latest file from
-[releases](https://github.com/Raishmomin/repointelligence/releases), then:
-
-```bash
-code --install-extension repo-intelligence-<new-version>.vsix
-```
-
-Reload VS Code and check the version under Extensions → Repository Intelligence Engine.
-
-### You also need a model
-
-The extension is the agent; the model is yours to bring. Either works:
-
-- **Local, free, offline** — install [Ollama](https://ollama.com), then:
-
-  ```bash
-  ollama pull qwen2.5-coder:7b
-  ```
-
-- **Cloud** — an API key for any supported provider (Claude, OpenAI, Gemini, OpenCode Zen, OpenRouter, Groq, Nvidia NIM), entered in the extension's provider panel. See [Getting started](#getting-started) for the setup flow.
-
-### First run
-
-1. Open a workspace folder.
-2. Run **`Repo Intelligence: Scan Repository`** from the command palette to index it.
-3. Open the Repo Intelligence panel and ask something — *"where is the footer component?"* is a good first test.
-
-## Getting started
-
-To build from source instead:
-
-```bash
-npm install
-npm run build
-```
-
-Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
-
-Open the Repo Intelligence view in the activity bar. The bar above the input shows your active **model** and **mode** — click either to change it, or **＋** to add a platform:
-
-| Provider | Needs |
-|---|---|
-| **Anthropic** (Claude) | API key |
-| **Ollama** (local) | nothing — lists the models you have pulled |
-| **OpenAI** | API key |
-| **Google Gemini** | API key |
-| **OpenCode Zen** | API key — from [opencode.ai/auth](https://opencode.ai/auth) |
-| **OpenRouter** | API key |
-| **Groq** | API key |
-| **Nvidia NIM** | API key |
-
-Keys go into the OS keychain via `SecretStorage`, never `settings.json`. Setup validates against the live backend before saving, and models are listed from the provider itself rather than hardcoded.
-
-The same flow is available from the command palette as **`Repo Intelligence: Choose Model Provider`**. The status bar shows the active provider and model, turning amber if a run falls back to a different backend than the one you chose.
-
-Then run `Repo Intelligence: Scan Repository` to index the workspace.
-
-> **Model choice matters more than anything else here.** The agent works by emitting structured tool calls. A small general-purpose local model cannot do that reliably, and the way it fails is by replying in prose — often by asking *you* where a file is instead of searching for it. Anything under about 7B parameters will do this. The model picker flags it, but it is worth knowing why.
-
-### Adding a provider
-
-A new backend is one implementation file, one descriptor, and one line in [src/layer3-reasoning/providers/registry.ts](src/layer3-reasoning/providers/registry.ts) — and for anything OpenAI-compatible, just a row in [`vendors.ts`](src/layer3-reasoning/providers/openai-compat/vendors.ts). The descriptor declares what configuration the provider needs — secrets, URLs, fixed or dynamically-listed models — and that single declaration drives the setup wizard, validation, the status bar, and the fallback chain. No changes to `ProviderFactory`, no union type to extend, no `package.json` edit.
 
 ---
 

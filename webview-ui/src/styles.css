@@ -740,3 +740,119 @@ details.step-tool {
   margin-left: 6px;
   color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
 }
+
+/* ── Markdown content ──────────────────────────────────────── */
+
+.md-heading {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+h1.md-heading { font-size: 1.25em; }
+h2.md-heading { font-size: 1.15em; }
+h3.md-heading { font-size: 1.05em; }
+h4.md-heading, h5.md-heading, h6.md-heading { font-size: 1em; }
+
+.md-paragraph {
+  margin: 6px 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.md-inline-code {
+  font-family: var(--vscode-editor-font-family, Consolas, 'Courier New', monospace);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.15));
+}
+
+.md-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+}
+
+.md-code-lang {
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editorWidget-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.md-pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family, Consolas, 'Courier New', monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.md-list {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.md-list li {
+  margin: 3px 0;
+  line-height: 1.5;
+}
+
+.md-blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--vscode-focusBorder);
+  color: var(--vscode-descriptionForeground);
+}
+
+.md-table-wrap {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.md-table th,
+.md-table td {
+  padding: 5px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  text-align: left;
+}
+
+.md-table th {
+  font-weight: 600;
+  background: var(--vscode-editorWidget-background);
+}
+
+.md-table tr:nth-child(even) {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.md-hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.md-link {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: none;
+}
+
+.md-link:hover {
+  text-decoration: underline;
+}
