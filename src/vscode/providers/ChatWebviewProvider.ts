@@ -272,20 +272,40 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             await this.handleRetry();
             break;
           case 'approveChangeSet':
-            await this.container.agentService.approveChangeSet(message.changeSetId);
-            this.pushApprovals();
+            this.postToWebview({ type: 'status', status: 'thinking', message: 'Applying change set…' });
+            try {
+              await this.container.agentService.approveChangeSet(message.changeSetId);
+            } finally {
+              this.pushApprovals();
+              this.postToWebview({ type: 'status', status: 'idle' });
+            }
             break;
           case 'rejectChangeSet':
-            await this.container.agentService.rejectChangeSet(message.changeSetId);
-            this.pushApprovals();
+            this.postToWebview({ type: 'status', status: 'thinking', message: 'Rejecting change set…' });
+            try {
+              await this.container.agentService.rejectChangeSet(message.changeSetId);
+            } finally {
+              this.pushApprovals();
+              this.postToWebview({ type: 'status', status: 'idle' });
+            }
             break;
           case 'approveCommand':
-            this.showAgentLog(await this.container.agentService.approveCommand(message.commandId));
-            this.pushApprovals();
+            this.postToWebview({ type: 'status', status: 'thinking', message: 'Running approved command…' });
+            try {
+              this.showAgentLog(await this.container.agentService.approveCommand(message.commandId));
+            } finally {
+              this.pushApprovals();
+              this.postToWebview({ type: 'status', status: 'idle' });
+            }
             break;
           case 'rejectCommand':
-            await this.container.agentService.rejectCommand(message.commandId);
-            this.pushApprovals();
+            this.postToWebview({ type: 'status', status: 'thinking', message: 'Declining command…' });
+            try {
+              await this.container.agentService.rejectCommand(message.commandId);
+            } finally {
+              this.pushApprovals();
+              this.postToWebview({ type: 'status', status: 'idle' });
+            }
             break;
           case 'openDiff':
             await this.showAgentDiff(message.changeSetId, message.path);
