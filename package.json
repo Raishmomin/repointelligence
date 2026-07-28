@@ -2,7 +2,7 @@
   "name": "repo-intelligence",
   "displayName": "Repository Intelligence Engine",
   "description": "AI-powered repository analysis engine that deeply understands your codebase before generating context-aware code using local Ollama models.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "repo-intelligence",
   "license": "MIT",
   "repository": {
@@ -166,7 +166,7 @@
         "repo-intelligence.provider": {
           "type": "string",
           "default": "anthropic",
-          "markdownDescription": "Active model backend, by provider id. Use **Repo Intelligence: Choose Model Provider** to configure it \u2014 this is deliberately not an enum so new providers work without a schema change."
+          "markdownDescription": "Active model backend, by provider id. Use **Repo Intelligence: Choose Model Provider** to configure it — this is deliberately not an enum so new providers work without a schema change."
         },
         "repo-intelligence.anthropic.model": {
           "type": "string",
@@ -214,7 +214,7 @@
         "repo-intelligence.ollama.chatModel": {
           "type": "string",
           "default": "qwen2.5-coder:7b",
-          "markdownDescription": "Local model used for the agent. Needs to be capable enough to emit structured tool calls \u2014 a small general-purpose model will ask you where files are instead of searching. Recommended: `qwen2.5-coder:7b` or larger. Pull one with `ollama pull qwen2.5-coder:7b`."
+          "markdownDescription": "Local model used for the agent. Needs to be capable enough to emit structured tool calls — a small general-purpose model will ask you where files are instead of searching. Recommended: `qwen2.5-coder:7b` or larger. Pull one with `ollama pull qwen2.5-coder:7b`."
         },
         "repo-intelligence.ollama.embeddingModel": {
           "type": "string",
@@ -313,7 +313,7 @@
           "additionalProperties": {
             "type": "object"
           },
-          "markdownDescription": "Per-provider settings, keyed by provider id. Managed by **Choose Model Provider**. Never contains API keys \u2014 those live in the OS keychain via SecretStorage."
+          "markdownDescription": "Per-provider settings, keyed by provider id. Managed by **Choose Model Provider**. Never contains API keys — those live in the OS keychain via SecretStorage."
         },
         "repo-intelligence.providerFallback": {
           "type": "string",
