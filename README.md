@@ -10,25 +10,39 @@ Works against **Claude**, **OpenAI**, **Gemini**, **OpenCode Zen**, **OpenRouter
 
 ### From a release (recommended)
 
-1. Download `repo-intelligence-<version>.vsix` from the [latest release](https://github.com/Raishmomin/repointelligence/releases).
+Every push to `main` automatically builds, tests, and publishes a new release with a bumped version — so the [latest release](https://github.com/Raishmomin/repointelligence/releases/latest) is always up to date.
+
+#### Using the terminal (recommended for Linux)
+
+```bash
+# Download the latest .vsix (requires GitHub CLI)
+gh release download --repo Raishmomin/repointelligence --pattern "*.vsix"
+
+# Or with curl
+curl -LO $(curl -s https://api.github.com/repos/Raishmomin/repointelligence/releases/latest \
+  | grep browser_download_url | grep .vsix | cut -d '"' -f 4)
+
+# Install it
+code --install-extension repo-intelligence-*.vsix
+```
+
+#### Using VS Code UI
+
+1. Download the `.vsix` from the [latest release](https://github.com/Raishmomin/repointelligence/releases/latest).
 2. In VS Code, open the Extensions panel (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>), click the **⋯** menu in its top-right corner, and choose **Install from VSIX…**, then pick the downloaded file.
-
-   Or from a terminal:
-
-   ```bash
-   code --install-extension repo-intelligence-0.1.4.vsix
-   ```
-
 3. Reload VS Code (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*). The **Repo Intelligence** icon appears in the activity bar.
+
+> **Linux note:** Some browsers download the `.vsix` as a `.zip` or extract it into a folder (because a `.vsix` is a zip internally). If this happens, either rename the `.zip` back to `.vsix`, or use the terminal method above.
 
 ### Updating to a newer version
 
 Installing a newer `.vsix` replaces the older one — no uninstall needed, and your
-sessions, settings and API keys are kept. Download the latest file from
-[releases](https://github.com/Raishmomin/repointelligence/releases), then:
+sessions, settings and API keys are kept.
 
 ```bash
-code --install-extension repo-intelligence-<new-version>.vsix
+# One-liner: download latest + install
+gh release download --repo Raishmomin/repointelligence --pattern "*.vsix" --clobber \
+  && code --install-extension repo-intelligence-*.vsix
 ```
 
 Reload VS Code and check the version under Extensions → Repository Intelligence Engine.
