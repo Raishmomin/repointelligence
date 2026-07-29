@@ -59,7 +59,7 @@ describe('host → webview message contract', () => {
       { type: 'agentStream', runId: 'r1', steps: [] },
       {
         type: 'modelState',
-        state: { activeProviderId: 'a', activeProviderLabel: 'A', mode: 'implement' },
+        state: { activeProviderId: 'a', activeProviderLabel: 'A', mode: 'implement', approvalMode: 'ask' },
         models: [
           {
             providerId: 'ollama',
@@ -95,6 +95,7 @@ describe('host → webview message contract', () => {
       { type: 'cancelRun' },
       { type: 'retryMessage' },
       { type: 'setMode', mode: 'plan' },
+      { type: 'setApprovalMode', mode: 'auto' },
       { type: 'selectModel', providerId: 'ollama', modelId: 'qwen2.5-coder:7b' },
       { type: 'approveChangeSet', changeSetId: 'c1' },
       { type: 'rejectChangeSet', changeSetId: 'c1' },

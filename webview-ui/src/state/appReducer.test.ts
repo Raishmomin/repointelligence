@@ -173,7 +173,7 @@ describe('appReducer', () => {
       state = host(
         {
           type: 'modelState',
-          state: { activeProviderId: 'a', activeProviderLabel: 'A', mode: 'explain' },
+          state: { activeProviderId: 'a', activeProviderLabel: 'A', mode: 'explain', approvalMode: 'ask' },
           models: [],
         },
         state,

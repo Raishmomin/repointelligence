@@ -588,9 +588,19 @@ export class AgentService {
           (state.approvalMode === 'auto' && outcome.operation.risk === 'low');
 
         if (shouldAutoApprove) {
-          const applyResult = await this.container.changeSetService.apply(change);
-          if (applyResult.ok) {
-            state.fileState.recordWrite(outcome.operation.path, outcome.operation.content ?? '');
+          let applyError: string | undefined;
+          try {
+            await this.container.changeSetService.apply(change);
+          } catch (err) {
+            applyError = err instanceof Error ? err.message : String(err);
+          }
+
+          if (!applyError) {
+            if (outcome.operation.content !== undefined && outcome.operation.kind !== 'delete') {
+              state.fileState.recordWrite(outcome.operation.path, outcome.operation.content, state.turn);
+            } else {
+              state.fileState.invalidate(outcome.operation.path);
+            }
             const msg = `Applied change to ${outcome.operation.path}`;
             pending.resolved[call.id] = { content: msg, isError: false };
             this.events.emit('agent:toolCallResult', {
@@ -631,16 +641,23 @@ export class AgentService {
 
       const shouldAutoApproveCmd = state.approvalMode === 'yolo';
       if (shouldAutoApproveCmd) {
-        const result = await this.container.commandService.execute(request, context.workspace);
-        const msg = result.output || `Command executed with exit code ${result.exitCode}`;
-        pending.resolved[call.id] = { content: msg, isError: result.exitCode !== 0 };
+        let output: string;
+        let failed = false;
+        try {
+          output = await this.container.commandRunner.run(request);
+        } catch (error) {
+          output = error instanceof Error ? error.message : String(error);
+          failed = true;
+        }
+
+        pending.resolved[call.id] = { content: truncate(output), isError: failed };
         this.events.emit('agent:toolCallResult', {
           runId: state.run.id,
           toolCallId: call.id,
           name: call.name,
-          ok: result.exitCode === 0,
-          preview: preview(msg),
-          output: outputExcerpt(msg),
+          ok: !failed,
+          preview: preview(output),
+          output: outputExcerpt(output),
         });
         continue;
       }
