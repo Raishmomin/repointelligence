@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { ExtensionToWebview, TaskModeDto } from '@shared/webview.types';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type { ApprovalModeDto, ExtensionToWebview, TaskModeDto } from '@shared/webview.types';
 import { ComposerBar } from './components/ComposerBar';
 import { ProviderPanel } from './components/ProviderPanel';
 import { SessionPanel } from './components/SessionPanel';
@@ -41,6 +41,9 @@ export function App() {
     const text = input.trim();
     if (!text) return;
     setInput('');
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+    }
     post({ type: 'sendAgentMessage', text, mode: state.modelState.mode });
   }, [input, state.modelState.mode]);
 
@@ -49,26 +52,63 @@ export function App() {
     post({ type: 'setMode', mode });
   }, []);
 
+  const setApprovalMode = useCallback((mode: ApprovalModeDto) => {
+    dispatch({ type: 'setApprovalMode', mode });
+    post({ type: 'setApprovalMode', mode });
+  }, []);
+
+  const handleApproveChangeSet = useCallback((id: string) => {
+    dispatch({ type: 'optimisticApproval', id });
+    post({ type: 'approveChangeSet', changeSetId: id });
+  }, []);
+
+  const handleRejectChangeSet = useCallback((id: string) => {
+    dispatch({ type: 'optimisticApproval', id });
+    post({ type: 'rejectChangeSet', changeSetId: id });
+  }, []);
+
+  const handleApproveCommand = useCallback((id: string) => {
+    dispatch({ type: 'optimisticApproval', id });
+    post({ type: 'approveCommand', commandId: id });
+  }, []);
+
+  const handleRejectCommand = useCallback((id: string) => {
+    dispatch({ type: 'optimisticApproval', id });
+    post({ type: 'rejectCommand', commandId: id });
+  }, []);
+
+  const filteredApprovals = useMemo(() => {
+    return state.approvals.filter(
+      (a) =>
+        !state.optimisticApprovals.has(a.changeSetId ?? '') &&
+        !state.optimisticApprovals.has(a.commandId ?? ''),
+    );
+  }, [state.approvals, state.optimisticApprovals]);
+
   const busy = state.status !== 'idle' && state.status !== 'no-project';
 
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-title">{state.projectName ?? 'Repo Intelligence'}</span>
-        {state.framework && <span className="app-framework">{state.framework}</span>}
-        <button
-          type="button"
-          className="btn btn-small app-chats"
-          title="Chats"
-          onClick={() => setShowSessions(true)}
-        >
-          ☰
-        </button>
-        {busy && (
-          <button type="button" className="btn btn-small" onClick={() => post({ type: 'cancelRun' })}>
-            Stop
+        <div className="app-header-left">
+          <span className="app-title">{state.projectName ?? 'Repo Intelligence'}</span>
+          {state.framework && <span className="app-framework">{state.framework}</span>}
+        </div>
+        <div className="app-header-right">
+          <button
+            type="button"
+            className="btn btn-small app-chats"
+            title="Chats"
+            onClick={() => setShowSessions(true)}
+          >
+            ☰
           </button>
-        )}
+          {busy && (
+            <button type="button" className="btn btn-small btn-stop" onClick={() => post({ type: 'cancelRun' })}>
+              Stop
+            </button>
+          )}
+        </div>
       </header>
 
       {state.error && (
@@ -97,12 +137,14 @@ export function App() {
             messages={state.messages}
             streaming={state.streaming}
             timeline={state.timeline}
-            approvals={state.approvals}
-            onApproveChangeSet={(id) => post({ type: 'approveChangeSet', changeSetId: id })}
-            onRejectChangeSet={(id) => post({ type: 'rejectChangeSet', changeSetId: id })}
-            onApproveCommand={(id) => post({ type: 'approveCommand', commandId: id })}
-            onRejectCommand={(id) => post({ type: 'rejectCommand', commandId: id })}
+            approvals={filteredApprovals}
+            status={state.status}
+            onApproveChangeSet={handleApproveChangeSet}
+            onRejectChangeSet={handleRejectChangeSet}
+            onApproveCommand={handleApproveCommand}
+            onRejectCommand={handleRejectCommand}
             onOpenDiff={(changeSetId, path) => post({ type: 'openDiff', changeSetId, path })}
+            onRetry={() => post({ type: 'retryMessage' })}
           />
 
           {state.statusMessage && <div className="status-line">{state.statusMessage}</div>}
@@ -113,40 +155,38 @@ export function App() {
               models={state.models}
               onSelectModel={(providerId, modelId) => post({ type: 'selectModel', providerId, modelId })}
               onSetMode={setMode}
+              onSetApprovalMode={setApprovalMode}
               onAddProvider={() => setShowProviders(true)}
               onRefreshModels={() => post({ type: 'refreshModels' })}
             />
 
-            <div className="composer-input">
+            <div className="composer-input-pill">
               <textarea
                 ref={inputRef}
                 value={input}
-                placeholder="Ask about your codebase, or describe a change…"
-                rows={3}
-                onChange={(event) => setInput(event.target.value)}
+                placeholder="Ask or prompt..."
+                rows={1}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  // Auto expand text area up to max height
+                  event.target.style.height = 'auto';
+                  event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`;
+                }}
                 onKeyDown={(event) => {
-                  // Enter sends; Shift+Enter is a newline, matching every chat UI.
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
                     send();
                   }
                 }}
               />
-              {/* Offered only between runs, and only once there is an exchange to redo.
-                  Retry discards the last reply and re-runs its prompt — each run starts
-                  from the prompt alone, so this is a fresh attempt, not a continuation. */}
-              {!busy && !input && state.messages.length > 0 && (
-                <button
-                  type="button"
-                  className="btn"
-                  title="Discard the last reply and run its prompt again"
-                  onClick={() => post({ type: 'retryMessage' })}
-                >
-                  ↻ Retry
-                </button>
-              )}
-              <button type="button" className="btn btn-primary" disabled={busy} onClick={send}>
-                {busy ? '…' : 'Send'}
+              <button
+                type="button"
+                className={`send-circle-btn ${busy || !input.trim() ? 'disabled' : 'active'}`}
+                disabled={busy || !input.trim()}
+                onClick={send}
+                title="Send message"
+              >
+                ↑
               </button>
             </div>
           </div>

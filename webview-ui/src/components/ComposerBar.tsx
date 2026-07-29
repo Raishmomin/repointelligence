@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ModelOptionDto, ModelStateDto, TaskModeDto } from '@shared/webview.types';
+import type { ApprovalModeDto, ModelOptionDto, ModelStateDto, TaskModeDto } from '@shared/webview.types';
 
 const MODES: Array<{ value: TaskModeDto; label: string; detail: string }> = [
   { value: 'implement', label: 'Implement', detail: 'Make the change, for your approval' },
@@ -7,30 +7,35 @@ const MODES: Array<{ value: TaskModeDto; label: string; detail: string }> = [
   { value: 'explain', label: 'Explain', detail: 'Answer questions, change nothing' },
 ];
 
+const APPROVAL_MODES: Array<{ value: ApprovalModeDto; label: string; icon: string; detail: string }> = [
+  { value: 'ask', label: 'Ask', icon: '🛡', detail: 'Review & approve each change' },
+  { value: 'auto', label: 'Auto', icon: '⚡', detail: 'Auto-approve safe file edits' },
+  { value: 'yolo', label: 'Don\'t Ask', icon: '🔥', detail: 'Auto-approve all changes & commands' },
+];
+
 interface Props {
   state: ModelStateDto;
   models: ModelOptionDto[];
   onSelectModel(providerId: string, modelId: string): void;
   onSetMode(mode: TaskModeDto): void;
+  onSetApprovalMode?(mode: ApprovalModeDto): void;
   onAddProvider(): void;
   onRefreshModels(): void;
 }
 
 /**
- * The bar above the input: which model, which mode, and a way to add a provider.
- *
- * Both controls are the *current* value rendered as a button, so what is in effect is
- * always visible rather than being something you have to open a menu to discover.
+ * The bar above the input: which model, which mode, approval preference, and a way to add a provider.
  */
 export function ComposerBar({
   state,
   models,
   onSelectModel,
   onSetMode,
+  onSetApprovalMode,
   onAddProvider,
   onRefreshModels,
 }: Props) {
-  const [openMenu, setOpenMenu] = useState<'model' | 'mode' | null>(null);
+  const [openMenu, setOpenMenu] = useState<'model' | 'mode' | 'approval' | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Close on an outside click or Escape — a popover that traps focus in a narrow sidebar
@@ -54,6 +59,7 @@ export function ComposerBar({
   }, [openMenu]);
 
   const activeMode = MODES.find((mode) => mode.value === state.mode) ?? MODES[0];
+  const activeApproval = APPROVAL_MODES.find((app) => app.value === state.approvalMode) ?? APPROVAL_MODES[0];
   const modelLabel = state.activeModelId || state.activeProviderLabel;
 
   const grouped = groupByProvider(models);
@@ -85,6 +91,17 @@ export function ComposerBar({
         onClick={() => setOpenMenu(openMenu === 'mode' ? null : 'mode')}
       >
         <span className="chip-label">{activeMode.label}</span>
+        <span className="chip-caret">▾</span>
+      </button>
+
+      <button
+        type="button"
+        className="chip"
+        title={activeApproval.detail}
+        onClick={() => setOpenMenu(openMenu === 'approval' ? null : 'approval')}
+      >
+        <span className="chip-icon-inline">{activeApproval.icon}</span>
+        <span className="chip-label">{activeApproval.label}</span>
         <span className="chip-caret">▾</span>
       </button>
 
@@ -121,8 +138,6 @@ export function ComposerBar({
                 >
                   <span className="menu-item-label">
                     {model.label}
-                    {/* The host used to append a "$(warning)" codicon here, which this
-                        React menu rendered as literal text. */}
                     {model.caution && (
                       <span className="menu-caution" title={model.detail}>
                         ⚠
@@ -153,6 +168,29 @@ export function ComposerBar({
             >
               <span className="menu-item-label">{mode.label}</span>
               <span className="menu-item-detail">{mode.detail}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {openMenu === 'approval' && (
+        <div className="menu" role="listbox">
+          {APPROVAL_MODES.map((app) => (
+            <button
+              key={app.value}
+              type="button"
+              role="option"
+              aria-selected={app.value === (state.approvalMode ?? 'ask')}
+              className={`menu-item ${app.value === (state.approvalMode ?? 'ask') ? 'menu-item-active' : ''}`}
+              onClick={() => {
+                setOpenMenu(null);
+                if (onSetApprovalMode) onSetApprovalMode(app.value);
+              }}
+            >
+              <span className="menu-item-label">
+                <span className="chip-icon-inline">{app.icon}</span> {app.label}
+              </span>
+              <span className="menu-item-detail">{app.detail}</span>
             </button>
           ))}
         </div>

@@ -11,6 +11,7 @@ import { buildReactHtml, isReactUiEnabled } from './ReactWebviewHost';
 import { ProviderRpcHandler } from './ProviderRpcHandler';
 import type {
   AgentStreamStep,
+  ApprovalModeDto,
   ExtensionToWebview,
   RpcMethod,
   TaskModeDto,
@@ -43,6 +44,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private readonly deliveredSteps = new Map<string, AgentStreamStep[]>();
   private readonly rpcHandler = new ProviderRpcHandler(this.container.providerFactory);
   private activeMode: TaskModeDto = 'implement';
+  private activeApprovalMode: ApprovalModeDto = 'ask';
   /** Set when a run was served by a fallback, so the composer bar can flag it. */
   private lastFallbackFrom: string | undefined;
 
@@ -103,7 +105,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       const catalog = this.rpcHandler.getCatalog();
       const state = catalog.state(this.activeMode);
       const models = await catalog.list(force);
-      this.postToWebview({ type: 'modelState', state: { ...state, fallbackFrom: this.lastFallbackFrom }, models });
+      this.postToWebview({
+        type: 'modelState',
+        state: { ...state, approvalMode: this.activeApprovalMode, fallbackFrom: this.lastFallbackFrom },
+        models,
+      });
     } catch (error) {
       this.logger.warn('Could not build the model catalogue', { error: String(error) });
     }
@@ -128,7 +134,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const changes = this.container.agentService.getPendingChangeSets().map(change => ({
       changeSetId: change.id,
       summary: change.summary,
-      paths: change.operations.map(op => op.path),
+      paths: change.operations.map(op => ({
+        path: op.path,
+        preview: op.content ? op.content.slice(0, 1500) : op.beforeContent ? op.beforeContent.slice(0, 1500) : undefined,
+      })),
       risk: change.operations[0]?.risk ?? 'low',
     }));
 
@@ -256,6 +265,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             break;
           case 'setMode':
             this.activeMode = message.mode;
+            await this.pushModelState();
+            break;
+          case 'setApprovalMode':
+            this.activeApprovalMode = message.mode;
             await this.pushModelState();
             break;
           case 'selectModel':
