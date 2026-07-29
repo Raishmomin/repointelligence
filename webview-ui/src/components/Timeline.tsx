@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentStreamStep, ChatMessageDto, PendingApprovalDto } from '@shared/webview.types';
 import type { TimelineEntry } from '../state/appReducer';
 import { MarkdownContent } from './MarkdownContent';
@@ -8,11 +8,13 @@ interface Props {
   streaming: string;
   timeline: TimelineEntry[];
   approvals: PendingApprovalDto[];
+  status?: string;
   onApproveChangeSet(id: string): void;
   onRejectChangeSet(id: string): void;
   onApproveCommand(id: string): void;
   onRejectCommand(id: string): void;
   onOpenDiff(changeSetId: string, path: string): void;
+  onRetry?(): void;
 }
 
 // ── Interleaving ─────────────────────────────────────────────
@@ -103,36 +105,58 @@ export function Timeline({
   streaming,
   timeline,
   approvals,
+  status,
   onApproveChangeSet,
   onRejectChangeSet,
   onApproveCommand,
   onRejectCommand,
   onOpenDiff,
+  onRetry,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
-  // Follow the tail as content arrives. `auto` rather than `smooth`: during streaming a
-  // smooth scroll never finishes before the next update restarts it.
+  // Follow tail. Smooth scroll when non-streaming updates happen.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [messages.length, streaming, timeline, approvals.length]);
+    endRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth', block: 'end' });
+  }, [messages.length, streaming, timeline, approvals.length, status]);
 
   const feed = useMemo(
     () => buildFeed(messages, timeline, streaming),
     [messages, timeline, streaming],
   );
 
+  const lastUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
   return (
     <div className="timeline">
       {feed.map((item, index) => {
         switch (item.kind) {
-          case 'user':
+          case 'user': {
+            const isLastUser = item.message.id === lastUserMsgId;
             return (
               <div key={item.message.id} className="bubble bubble-user">
-                <span className="bubble-role">You</span>
+                <div className="bubble-header-row">
+                  <span className="bubble-role">You</span>
+                  {isLastUser && onRetry && (
+                    <button
+                      type="button"
+                      className="bubble-retry-btn"
+                      title="Retry this message"
+                      onClick={onRetry}
+                    >
+                      ↻
+                    </button>
+                  )}
+                </div>
                 <div className="bubble-content">{item.message.content}</div>
               </div>
             );
+          }
           case 'assistant':
             return (
               <div key={item.message.id} className="bubble bubble-assistant">
@@ -151,6 +175,17 @@ export function Timeline({
             );
         }
       })}
+
+      {status === 'thinking' && !streaming && (
+        <div className="bubble bubble-assistant bubble-typing">
+          <span className="bubble-role">Assistant</span>
+          <div className="typing-dots">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      )}
 
       {approvals.length > 0 && (
         <div className="approvals">
@@ -339,16 +374,45 @@ function ApprovalCard({
   onReject(): void;
   onOpenDiff(path: string): void;
 }) {
+  const [expandedPath, setExpandedPath] = useState<string | null>(null);
+
+  const normalizedPaths: Array<{ path: string; preview?: string }> = approval.paths.map((p) =>
+    typeof p === 'string' ? { path: p } : p,
+  );
+
   return (
     <div className={`approval approval-${approval.risk}`}>
       <div className="approval-summary">{approval.summary}</div>
 
-      {approval.paths.length > 0 && (
+      {normalizedPaths.length > 0 && (
         <div className="approval-paths">
-          {approval.paths.map((path) => (
-            <button key={path} type="button" className="approval-path" onClick={() => onOpenDiff(path)}>
-              {path}
-            </button>
+          {normalizedPaths.map(({ path, preview }) => (
+            <div key={path} className="approval-path-item">
+              <div className="approval-path-row">
+                <button
+                  type="button"
+                  className="approval-path"
+                  onClick={() => onOpenDiff(path)}
+                  title="Open full diff in editor"
+                >
+                  📄 {path}
+                </button>
+                {preview && (
+                  <button
+                    type="button"
+                    className="approval-preview-toggle"
+                    onClick={() => setExpandedPath(expandedPath === path ? null : path)}
+                  >
+                    {expandedPath === path ? '▲ Hide Diff' : '👁 View Diff'}
+                  </button>
+                )}
+              </div>
+              {expandedPath === path && preview && (
+                <div className="approval-preview-box">
+                  <pre className="approval-preview-code"><code>{preview}</code></pre>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

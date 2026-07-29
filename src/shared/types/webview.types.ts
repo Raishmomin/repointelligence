@@ -50,6 +50,7 @@ export type AgentStreamStep =
 // ── View models ──────────────────────────────────────────────
 
 export type TaskModeDto = 'implement' | 'plan' | 'explain';
+export type ApprovalModeDto = 'ask' | 'auto' | 'yolo';
 
 export interface ChatMessageDto {
   id: string;
@@ -85,6 +86,7 @@ export interface ModelStateDto {
   activeProviderLabel: string;
   activeModelId?: string;
   mode: TaskModeDto;
+  approvalMode: ApprovalModeDto;
   /** Set when the last run was served by something other than the configured provider. */
   fallbackFrom?: string;
 }
@@ -102,8 +104,8 @@ export interface PendingApprovalDto {
   changeSetId?: string;
   commandId?: string;
   summary: string;
-  /** Files touched, for the diff cards. */
-  paths: string[];
+  /** Files touched and optional inline diff preview for the diff cards. */
+  paths: Array<{ path: string; preview?: string }>;
   risk: string;
 }
 
@@ -139,6 +141,7 @@ export type WebviewToExtension =
   /** Re-run the session's last prompt, discarding the reply it produced. */
   | { type: 'retryMessage' }
   | { type: 'setMode'; mode: TaskModeDto }
+  | { type: 'setApprovalMode'; mode: ApprovalModeDto }
   | { type: 'selectModel'; providerId: string; modelId: string }
   | { type: 'approveChangeSet'; changeSetId: string }
   | { type: 'rejectChangeSet'; changeSetId: string }

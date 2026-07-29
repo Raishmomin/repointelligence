@@ -1,6 +1,7 @@
 import {
   assertNever,
   type AgentStreamStep,
+  type ApprovalModeDto,
   type ChatMessageDto,
   type ExtensionToWebview,
   type ModelOptionDto,
@@ -30,6 +31,7 @@ export interface AppState {
   models: ModelOptionDto[];
   modelState: ModelStateDto;
   approvals: PendingApprovalDto[];
+  optimisticApprovals: Set<string>;
   error?: string;
 }
 
@@ -45,13 +47,17 @@ export const initialState: AppState = {
     activeProviderId: '',
     activeProviderLabel: 'Loading…',
     mode: 'implement',
+    approvalMode: 'ask',
   },
   approvals: [],
+  optimisticApprovals: new Set<string>(),
 };
 
 export type AppAction =
   | { type: 'host'; message: ExtensionToWebview }
   | { type: 'setMode'; mode: TaskModeDto }
+  | { type: 'setApprovalMode'; mode: ApprovalModeDto }
+  | { type: 'optimisticApproval'; id: string }
   | { type: 'dismissError' };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
@@ -59,6 +65,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     // Applied optimistically so the toggle feels instant; the host confirms with a
     // modelState message.
     return { ...state, modelState: { ...state.modelState, mode: action.mode } };
+  }
+  if (action.type === 'setApprovalMode') {
+    return { ...state, modelState: { ...state.modelState, approvalMode: action.mode } };
+  }
+  if (action.type === 'optimisticApproval') {
+    const nextSet = new Set(state.optimisticApprovals);
+    nextSet.add(action.id);
+    return { ...state, optimisticApprovals: nextSet };
   }
   if (action.type === 'dismissError') return { ...state, error: undefined };
 

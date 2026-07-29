@@ -12,6 +12,7 @@ import {
   CommandRequest,
   TaskMode,
 } from '../../shared/types/agent.types';
+import { ApprovalModeDto } from '../../shared/types/webview.types';
 import {
   LlmContentBlock,
   LlmMessage,
@@ -47,6 +48,7 @@ interface RunState {
   fileState: FileStateTracker;
   pending?: PendingTurnState;
   turn: number;
+  approvalMode?: ApprovalModeDto;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
   cancellation: vscode.CancellationTokenSource;
   /** How many times the agent has actually looked at the repository this run. */
@@ -189,6 +191,7 @@ export class AgentService {
     mode: TaskMode,
     workspace: vscode.WorkspaceFolder,
     sessionId?: string,
+    approvalMode: ApprovalModeDto = 'ask',
   ): Promise<AgentRun> {
     const resolved = await this.container.providerFactory.resolveChatProvider();
     if (!resolved) {
@@ -236,6 +239,7 @@ export class AgentService {
       transcript,
       fileState: new FileStateTracker(),
       turn: 0,
+      approvalMode,
       usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
       cancellation: new vscode.CancellationTokenSource(),
       discoveryToolsUsed: 0,
@@ -578,6 +582,29 @@ export class AgentService {
           status: 'proposed',
           createdAt: Date.now(),
         };
+
+        const shouldAutoApprove =
+          state.approvalMode === 'yolo' ||
+          (state.approvalMode === 'auto' && outcome.operation.risk === 'low');
+
+        if (shouldAutoApprove) {
+          const applyResult = await this.container.changeSetService.apply(change);
+          if (applyResult.ok) {
+            state.fileState.recordWrite(outcome.operation.path, outcome.operation.content ?? '');
+            const msg = `Applied change to ${outcome.operation.path}`;
+            pending.resolved[call.id] = { content: msg, isError: false };
+            this.events.emit('agent:toolCallResult', {
+              runId: state.run.id,
+              toolCallId: call.id,
+              name: call.name,
+              ok: true,
+              preview: preview(msg),
+              output: outputExcerpt(msg),
+            });
+            continue;
+          }
+        }
+
         this.pendingChangeSets.set(change.id, change);
         this.container.database.run(
           'INSERT INTO change_sets (id, run_id, workspace_uri, summary, operations_json, status, created_at, tool_use_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -601,6 +628,23 @@ export class AgentService {
         id: crypto.randomUUID(),
         runId: state.run.id,
       };
+
+      const shouldAutoApproveCmd = state.approvalMode === 'yolo';
+      if (shouldAutoApproveCmd) {
+        const result = await this.container.commandService.execute(request, context.workspace);
+        const msg = result.output || `Command executed with exit code ${result.exitCode}`;
+        pending.resolved[call.id] = { content: msg, isError: result.exitCode !== 0 };
+        this.events.emit('agent:toolCallResult', {
+          runId: state.run.id,
+          toolCallId: call.id,
+          name: call.name,
+          ok: result.exitCode === 0,
+          preview: preview(msg),
+          output: outputExcerpt(msg),
+        });
+        continue;
+      }
+
       this.pendingCommands.set(request.id, request);
       const now = Date.now();
       this.container.database.run(
